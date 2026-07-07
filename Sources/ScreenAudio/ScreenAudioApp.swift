@@ -24,7 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var viewModel: VolumeViewModel!
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // 固定宽度：title 含音量数字（拖滑块时变化），variableLength 会让 button 宽度
+        // 随数字位数变化 → popover 锚点（relativeTo: button.bounds）漂移。固定 60pt 容下 "🔊 100"。
+        statusItem = NSStatusBar.system.statusItem(withLength: 60)
         statusItem.button?.title = "🔊 \(state.value)"
         statusItem.button?.action = #selector(togglePopover(_:))
         statusItem.button?.target = self
