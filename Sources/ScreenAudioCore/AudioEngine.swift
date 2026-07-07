@@ -176,7 +176,7 @@ public final class AudioEngine: @unchecked Sendable {
         if total > 0 {
             let rms = sqrt(sumSq / Float(total))
             // 源 RMS 通常 0.05–0.3，放大 *4 让正常音频下音波明显跳动；clamp 0–1。
-            currentLevel.store(min(1.0, rms * 4.0), ordering: .releasing)
+            currentLevel.store(min(1.0, rms * 6.0), ordering: .releasing)
         }
     }
 
