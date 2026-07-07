@@ -582,12 +582,12 @@ public enum AudioDeviceResolver {
         )
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectIDSystemObject), &address, 0, nil, &size) == noErr
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr
         else { return [] }
         let count = Int(size) / MemoryLayout<AudioDeviceID>.size
         var ids = [AudioDeviceID](repeating: 0, count: count)
         guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectIDSystemObject), &address, 0, nil, &size, &ids) == noErr
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr
         else { return [] }
         return ids.map { ($0, deviceName($0)) }
     }
@@ -659,7 +659,7 @@ public final class DefaultDeviceGuard {
         var id: AudioDeviceID = 0
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         _ = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectIDSystemObject), &address, 0, nil, &size, &id)
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id)
         return id
     }
     private static func set(_ id: AudioDeviceID) {
@@ -671,7 +671,7 @@ public final class DefaultDeviceGuard {
         var did = id
         let size = UInt32(MemoryLayout<AudioDeviceID>.size)
         _ = AudioObjectSetPropertyData(
-            AudioObjectID(kAudioObjectIDSystemObject), &address, 0, nil, size, &did)
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, size, &did)
     }
 }
 ```
