@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let store = VolumeStore()
     private var viewModel: VolumeViewModel!
     private var levelTimer: Timer?
+    private var waveformHeights: [Float] = [0, 0, 0]   // 3 根条的平滑高度，各位独立衰减
 
     /// 中转模式：BlackHole → 设备（gain 控音量）；直通模式：默认输出设备（系统音量控）。
     private enum OutputMode { case transfer, direct }
@@ -65,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         // 固定宽度：状态栏渲染 3 根音波竖条（28pt 图像 + 留白），40pt 足够。
         statusItem = NSStatusBar.system.statusItem(withLength: 40)
-        statusItem.button?.image = Self.waveformImage(level: 0)
+        statusItem.button?.image = Self.waveformImage(heights: [0, 0, 0])
         statusItem.button?.image?.isTemplate = true   // 追随深浅色
         statusItem.button?.action = #selector(togglePanel(_:))
         statusItem.button?.target = self
@@ -225,29 +226,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - 状态栏音波
 
-    /// 读取 AudioEngine 实时电平，刷新状态栏 image（30fps）。
+    /// 读取 AudioEngine 实时电平，用峰值保持+自由落体衰减更新各条高度，刷新状态栏 image（30fps）。
     @MainActor
     private func refreshWaveform() {
-        let level = engine?.currentLevelValue() ?? 0
-        statusItem.button?.image = Self.waveformImage(level: level)
+        let raw = max(0, engine?.currentLevelValue() ?? 0)
+        let weights: [Float] = [0.55, 1.0, 0.7]
+        // 每根条独立：瞬时峰值拉起，缓衰减下落（0.90 / 帧 ≈ 30fps 约 1.5 秒回落）
+        for i in waveformHeights.indices {
+            let target = raw * weights[i]
+            if target >= waveformHeights[i] {
+                waveformHeights[i] = target        // 上升：即时拉满
+            } else {
+                waveformHeights[i] += (target - waveformHeights[i]) * 0.10   // 下落：缓衰减（自由落体感）
+            }
+        }
+        statusItem.button?.image = Self.waveformImage(heights: waveformHeights)
     }
 
-    /// 绘制 3 根竖条音波；level 0.0–1.0，电平越高条越高。template 图像追随深浅色。
+    /// 绘制 3 根竖条音波，用传入的 per-bar 高度。template 图像追随深浅色。
     /// lockFocus 必须在主线程（用到当前 graphics context），refreshWaveform 已是 @MainActor。
-    private static func waveformImage(level: Float) -> NSImage {
+    private static func waveformImage(heights: [Float]) -> NSImage {
         let size = NSSize(width: 28, height: 16)
         let image = NSImage(size: size)
-        image.isTemplate = true   // 每个新 image 都要设，否则不追随深浅色
+        image.isTemplate = true
         image.lockFocus()
-        // 3 根条，中间最高、右侧次之、左侧最矮，加固定权重让形状像音波。
-        let weights: [CGFloat] = [0.55, 1.0, 0.7]
         let barWidth: CGFloat = 4
         let gap: CGFloat = 3
-        let totalWidth = CGFloat(weights.count) * barWidth + CGFloat(weights.count - 1) * gap
+        let totalWidth = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
         let startX = (size.width - totalWidth) / 2
         NSColor.labelColor.setFill()
-        for (i, w) in weights.enumerated() {
-            let h = max(2.0, CGFloat(level) * w * size.height)
+        for (i, hf) in heights.enumerated() {
+            let h = max(2.0, CGFloat(hf) * size.height)
             let x = startX + CGFloat(i) * (barWidth + gap)
             let rect = NSRect(x: x, y: 0, width: barWidth, height: h)
             let path = NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5)
