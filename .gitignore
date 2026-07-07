@@ -1,0 +1,17 @@
+# SwiftPM build artifacts
+.build/
+.swiftpm/
+Package.resolved
+Package.resolved.*
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Claude Code (local-only settings; keep shared .claude/ content trackable)
+.claude/settings.local.json
