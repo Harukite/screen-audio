@@ -34,6 +34,14 @@ struct VolumePopoverView: View {
 
             Divider()
             Button(model.muted ? "取消静音" : "静音") { model.toggleMute() }
+            if model.installNeeded {
+                Divider()
+                Button {
+                    model.onInstall?()
+                } label: {
+                    Label("一键安装 BlackHole", systemImage: "arrow.down.circle.fill")
+                }
+            }
             Divider()
             HStack {
                 Text(model.deviceSummary).font(.caption).foregroundStyle(.secondary)
@@ -51,12 +59,15 @@ final class VolumeViewModel: ObservableObject {
     @Published var value: Int
     @Published var muted: Bool
     @Published var deviceSummary: String
+    @Published var installNeeded: Bool
     var onApply: ((VolumeState) -> Void)?
+    var onInstall: (() -> Void)?
 
-    init(state: VolumeState, deviceSummary: String) {
+    init(state: VolumeState, deviceSummary: String, installNeeded: Bool = false) {
         self.value = state.value
         self.muted = state.muted
         self.deviceSummary = deviceSummary
+        self.installNeeded = installNeeded
     }
 
     var statusIcon: String { muted ? "🔇" : "🔊" }

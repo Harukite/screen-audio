@@ -61,14 +61,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setUpPopover() {
-        viewModel = VolumeViewModel(state: state, deviceSummary: deviceSummaryText())
+        viewModel = VolumeViewModel(
+            state: state,
+            deviceSummary: deviceSummaryText(),
+            installNeeded: !BlackHoleInstaller.isInstalled
+        )
         viewModel.onApply = { [weak self] next in self?.apply(next) }
+        viewModel.onInstall = { [weak self] in self?.installBlackHole() }
 
         popover = NSPopover()
         popover.behavior = .transient            // 失焦自动关
         popover.contentViewController = NSHostingController(
             rootView: VolumePopoverView(model: viewModel, onQuit: { [weak self] in self?.quit() }))
         statusItem.button?.title = state.muted ? "🔇 \(state.value)" : "🔊 \(state.value)"
+    }
+
+    @MainActor
+    func installBlackHole() {
+        viewModel?.deviceSummary = "正在安装 BlackHole…（请在弹出的密码框输入 Mac 密码）"
+        viewModel?.installNeeded = false
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: Result<Void, Error>
+            do {
+                try BlackHoleInstaller.install()
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
+            Task { @MainActor in self.handleInstallResult(result) }
+        }
+    }
+
+    @MainActor
+    func handleInstallResult(_ result: Result<Void, Error>) {
+        switch result {
+        case .success:
+            if BlackHoleInstaller.isInstalled {
+                // 装好了，重新启动引擎流程（内部会 setUpPopover 刷新状态）
+                viewModel?.deviceSummary = "BlackHole 已安装，启动中…"
+                startEngineIfPossible()
+            } else {
+                viewModel?.deviceSummary = "安装未生效，请检查后重启 App"
+                viewModel?.installNeeded = true
+            }
+        case .failure(let error):
+            viewModel?.deviceSummary = "安装失败：\(error)"
+            viewModel?.installNeeded = true
+        }
     }
 
     @objc private func togglePopover(_ sender: Any?) {

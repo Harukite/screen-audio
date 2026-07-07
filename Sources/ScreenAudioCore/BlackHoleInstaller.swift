@@ -16,3 +16,41 @@ public enum BlackHoleInstaller {
         "brew install --cask \(cask)"
     }
 }
+
+public enum InstallError: Error, CustomStringConvertible {
+    case brewNotFound
+    case installFailed(Int32)
+
+    public var description: String {
+        switch self {
+        case .brewNotFound:
+            return "未找到 brew，请先安装 Homebrew"
+        case .installFailed(let code):
+            return "安装失败（退出码 \(code)）"
+        }
+    }
+}
+
+extension BlackHoleInstaller {
+    /// 用 osascript 弹系统密码框，以 admin 权限跑 brew install。
+    /// 阻塞直到安装完成（调用方应在后台线程调）。
+    public static func install() throws {
+        let brewPaths = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        guard let brew = brewPaths.first(where: {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }) else {
+            throw InstallError.brewNotFound
+        }
+        let task = Process()
+        task.launchPath = "/usr/bin/osascript"
+        task.arguments = [
+            "-e",
+            "do shell script \"'\(brew)' install --cask \(cask)\" with administrator privileges",
+        ]
+        try task.run()
+        task.waitUntilExit()
+        if task.terminationStatus != 0 {
+            throw InstallError.installFailed(task.terminationStatus)
+        }
+    }
+}
