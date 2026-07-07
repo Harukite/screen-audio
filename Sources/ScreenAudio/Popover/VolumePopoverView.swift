@@ -1,6 +1,13 @@
 import Combine
+import CoreAudio
 import ScreenAudioCore
 import SwiftUI
+
+/// UI 层的输出设备模型（比裸元组更便于 SwiftUI ForEach 识别）。
+struct OutputDevice: Identifiable, Hashable {
+    let id: AudioDeviceID
+    let name: String
+}
 
 /// 菜单栏点击图标弹出的 popover：横向滑块 + 静音 + 设备显示。
 ///
@@ -49,6 +56,36 @@ struct VolumePopoverView: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            // MARK: 输出设备列表（智能路由：原生→直通，HDMI→中转）
+            if !model.outputDevices.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("输出设备")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    let devices = model.outputDevices
+                    ForEach(devices) { (dev: OutputDevice) in
+                        Button {
+                            model.selectOutput(dev.id)
+                        } label: {
+                            HStack {
+                                Text(dev.name)
+                                    .foregroundStyle(dev.id == model.currentOutputDeviceID ? Color.accentColor : Color.primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Spacer()
+                                if dev.id == model.currentOutputDeviceID {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+
             // MARK: 操作区（条件安装 + 静音/退出）
             VStack(spacing: 8) {
                 if model.installNeeded {
@@ -87,8 +124,13 @@ final class VolumeViewModel: ObservableObject {
     @Published var muted: Bool
     @Published var deviceSummary: String
     @Published var installNeeded: Bool
+    /// 可选输出设备（已过滤 BlackHole）。
+    @Published var outputDevices: [OutputDevice] = []
+    /// 当前选中输出设备 id。
+    @Published var currentOutputDeviceID: AudioDeviceID = 0
     var onApply: ((VolumeState) -> Void)?
     var onInstall: (() -> Void)?
+    var onSwitchOutput: ((AudioDeviceID) -> Void)?
 
     init(state: VolumeState, deviceSummary: String, installNeeded: Bool = false) {
         self.value = state.value
@@ -96,8 +138,6 @@ final class VolumeViewModel: ObservableObject {
         self.deviceSummary = deviceSummary
         self.installNeeded = installNeeded
     }
-
-    var statusIcon: String { muted ? "🔇" : "🔊" }
 
     func setValue(_ v: Int) {
         value = max(0, min(100, v))
@@ -107,5 +147,9 @@ final class VolumeViewModel: ObservableObject {
     func toggleMute() {
         muted.toggle()
         onApply?(VolumeState(value: value, muted: muted))
+    }
+
+    func selectOutput(_ id: AudioDeviceID) {
+        onSwitchOutput?(id)
     }
 }

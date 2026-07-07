@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import ScreenAudioCore
 import SwiftUI
 
@@ -22,6 +23,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let store = VolumeStore()
     private var viewModel: VolumeViewModel!
     private var levelTimer: Timer?
+
+    /// 中转模式：BlackHole → 设备（gain 控音量）；直通模式：默认输出设备（系统音量控）。
+    private enum OutputMode { case transfer, direct }
+    private var outputMode: OutputMode = .transfer
+    private var currentOutputDevice: AudioDeviceID = 0
 
     private let panelWidth: CGFloat = 240
 
@@ -88,6 +94,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             engine = AudioEngine(input: bh, output: dell)
             guard_.captureAndSet(to: bh)
             try engine?.start()
+            outputMode = .transfer
+            currentOutputDevice = dell
             if let saved = store.load() { state = saved }
             engine?.setTargetGain(state.effectiveGain)
             setUpPanel()
@@ -105,8 +113,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             deviceSummary: deviceSummaryText(),
             installNeeded: !BlackHoleInstaller.isInstalled
         )
+        viewModel.outputDevices = availableOutputDevices()
+        viewModel.currentOutputDeviceID = currentOutputDevice
         viewModel.onApply = { [weak self] next in self?.apply(next) }
         viewModel.onInstall = { [weak self] in self?.installBlackHole() }
+        viewModel.onSwitchOutput = { [weak self] id in self?.switchOutputDevice(to: id) }
 
         // 每次重建 hosting view，保证 model 更新生效。
         let host = NSHostingView(
@@ -261,13 +272,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return dell.map { "● \($0)" } ?? "未找到 HDMI 设备"
     }
 
+    /// 列出可选输出设备（过滤掉 BlackHole —— 它是中转源，不能作 sink）。
+    private func availableOutputDevices() -> [OutputDevice] {
+        AudioDeviceResolver.listDevices()
+            .filter { !$0.name.contains("BlackHole") }
+            .map { OutputDevice(id: $0.id, name: $0.name) }
+    }
+
     private func apply(_ next: VolumeState) {
         state = next
-        engine?.setTargetGain(next.effectiveGain)
         store.save(next)
         viewModel?.value = next.value
         viewModel?.muted = next.muted
+        switch outputMode {
+        case .transfer:
+            engine?.setTargetGain(next.effectiveGain)
+        case .direct:
+            // 直通模式：控系统音量（静音时 0）。
+            AudioDeviceResolver.setDeviceVolume(currentOutputDevice, Float(next.effectiveGain))
+        }
         // 状态栏 image 由 levelTimer 持续刷新，apply 不需手动更新。
+    }
+
+    /// 切换输出音源：原生设备（支持软件音量）走直通，HDMI/DP 走中转。
+    @MainActor
+    func switchOutputDevice(to device: AudioDeviceID) {
+        let supportsVol = AudioDeviceResolver.deviceSupportsVolume(device)
+        if supportsVol {
+            // 直通：停 engine，默认输出切到 device，控系统音量。
+            engine?.stop()
+            engine = nil
+            DefaultDeviceGuard.setDefault(device)
+            outputMode = .direct
+        } else {
+            // 中转：默认输出切 BlackHole，engine sink 换 device。
+            let devices = AudioDeviceResolver.listDevices()
+            guard let bh = AudioDeviceResolver.blackHole(devices: devices) else { return }
+            DefaultDeviceGuard.setDefault(bh)
+            do {
+                if let existing = engine {
+                    try existing.switchOutput(to: device)
+                } else {
+                    let newEngine = AudioEngine(input: bh, output: device)
+                    try newEngine.start()
+                    engine = newEngine
+                }
+            } catch {
+                print("switch output failed: \(error)")
+            }
+            outputMode = .transfer
+        }
+        currentOutputDevice = device
+        viewModel?.currentOutputDeviceID = device
+        apply(state)
     }
 
     private func quit() {

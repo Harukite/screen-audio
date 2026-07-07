@@ -17,7 +17,7 @@ public final class AudioEngine: @unchecked Sendable {
     }
 
     private let inputDevice: AudioDeviceID
-    private let outputDevice: AudioDeviceID
+    private var outputDevice: AudioDeviceID
     private let ringBuffer: RingBuffer
     private let sampleRate: Double = 48000
     private let channels: UInt32 = 2
@@ -118,6 +118,41 @@ public final class AudioEngine: @unchecked Sendable {
             AudioDeviceStop(outputDevice, p)
             AudioDeviceDestroyIOProcID(outputDevice, p)
             outputProcID = nil
+        }
+    }
+
+    /// 切换输出 sink（中转模式换 HDMI 设备时用）。停旧 output IOProc → 换设备 → 重建。
+    /// output IOProc 闭包须在方法内重新声明（@convention(c) 闭包不能存为实例属性）。
+    public func switchOutput(to newOutput: AudioDeviceID) throws {
+        // 停旧 output
+        if let p = outputProcID {
+            AudioDeviceStop(outputDevice, p)
+            AudioDeviceDestroyIOProcID(outputDevice, p)
+            outputProcID = nil
+        }
+        outputDevice = newOutput
+        currentGain = 0   // 重置 ramp，防爆音
+
+        // 重建 output IOProc（闭包声明复用 start() 的形式）
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let outputProc: AudioDeviceIOProc = { _, _, _, _, outOutputData, _, clientData in
+            guard let clientData = clientData else { return noErr }
+            let engine = Unmanaged<AudioEngine>.fromOpaque(clientData).takeUnretainedValue()
+            engine.handleOutput(outOutputData)
+            return noErr
+        }
+        var outID: AudioDeviceIOProcID?
+        let status = AudioDeviceCreateIOProcID(outputDevice, outputProc, selfPtr, &outID)
+        guard status == noErr, let outID else {
+            throw EngineError.cannotCreateIO("switchOutput status=\(status)")
+        }
+        self.outputProcID = outID
+
+        let startStatus = AudioDeviceStart(outputDevice, outID)
+        guard startStatus == noErr else {
+            AudioDeviceDestroyIOProcID(outputDevice, outID)
+            self.outputProcID = nil
+            throw EngineError.cannotStart("switchOutput status=\(startStatus)")
         }
     }
 

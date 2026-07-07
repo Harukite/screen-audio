@@ -23,13 +23,13 @@ public final class DefaultDeviceGuard {
             original = found
             print("[Guard] captureAndSet: 当前默认 = \(Self.name(of: current)) 是 target/无效 → 找到 original = \(found.map { Self.name(of: $0) } ?? "nil")")
         }
-        Self.set(device)
+        Self.setDefault(device)
     }
 
     /// 还原到启动前的默认输出。
     public func restore() {
         print("[Guard] restore: original = \(original.map { Self.name(of: $0) } ?? "nil")")
-        if let orig = original { Self.set(orig) }
+        if let orig = original { Self.setDefault(orig) }
         original = nil
     }
 
@@ -47,7 +47,8 @@ public final class DefaultDeviceGuard {
         return id
     }
 
-    private static func set(_ id: AudioDeviceID) {
+    /// 设默认输出设备（公开，供 AppDelegate 切换音源时调用）。
+    public static func setDefault(_ id: AudioDeviceID) {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -57,7 +58,7 @@ public final class DefaultDeviceGuard {
         let size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let status = AudioObjectSetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, size, &did)
-        print("[Guard] set(\(name(of: id))) status=\(status)")
+        print("[Guard] setDefault(\(name(of: id))) status=\(status)")
     }
 
     /// 找可还原的输出设备（排除 target）：优先 HDMI（DELL），其次任意非 target / 非 BlackHole 设备。

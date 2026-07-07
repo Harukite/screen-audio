@@ -51,4 +51,28 @@ public enum AudioDeviceResolver {
         guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &name) == noErr else { return "" }
         return String(cString: name)
     }
+
+    /// 设备是否支持软件音量控制（决定中转 vs 直通）。
+    /// HDMI 设备（DELL）通常不支持 → false；内置/AirPods/USB → true。
+    public static func deviceSupportsVolume(_ id: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: 1)
+        return AudioObjectHasProperty(id, &address)
+    }
+
+    /// 设置设备音量（0.0–1.0）。用于直通模式控制系统音量。
+    public static func setDeviceVolume(_ id: AudioDeviceID, _ volume: Float) {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: 1)
+        var vol = max(0.0, min(1.0, volume))
+        let size = UInt32(MemoryLayout<Float32>.size)
+        let status = AudioObjectSetPropertyData(id, &address, 0, nil, size, &vol)
+        if status != noErr {
+            print("[Resolver] setDeviceVolume(\(deviceName(id))), vol=\(vol) status=\(status)")
+        }
+    }
 }
