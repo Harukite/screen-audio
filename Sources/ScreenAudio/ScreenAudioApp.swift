@@ -1,5 +1,6 @@
 import AppKit
 import ScreenAudioCore
+import SwiftUI
 
 @main
 struct ScreenAudioApp {
@@ -12,21 +13,26 @@ struct ScreenAudioApp {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var engine: AudioEngine?
     private var guard_ = DefaultDeviceGuard()
     private var state = VolumeState()
     private let store = VolumeStore()
+    private var popover: NSPopover!
+    private var viewModel: VolumeViewModel!
 
     func applicationDidFinishLaunching(_ note: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        rebuildMenu()
+        statusItem.button?.title = "🔊 \(state.value)"
+        statusItem.button?.action = #selector(togglePopover(_:))
+        statusItem.button?.target = self
 
-        // 若 BlackHole 未装，菜单显示安装指引；否则尝试启动中转。
+        // 若 BlackHole 未装，仅构造 popover 显示安装提示；否则尝试启动中转。
         if !BlackHoleInstaller.isInstalled {
             state = VolumeState(value: 50)
-            rebuildMenu()
+            setUpPopover()
             return
         }
         startEngineIfPossible()
@@ -36,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let devices = AudioDeviceResolver.listDevices()
         guard let bh = AudioDeviceResolver.blackHole(devices: devices),
               let dell = AudioDeviceResolver.hdmiOutput(devices: devices) else {
-            rebuildMenu()
+            setUpPopover()
             return
         }
         do {
@@ -45,50 +51,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try engine?.start()
             if let saved = store.load() { state = saved }
             engine?.setTargetGain(state.effectiveGain)
-            rebuildMenu()
+            setUpPopover()
         } catch {
             statusItem.button?.title = "⚠️"
             print("AudioEngine start failed: \(error)")
+            // 即使引擎启动失败也要构造 popover，否则点击图标会在 IUO 上崩溃。
+            setUpPopover()
         }
     }
 
-    private func rebuildMenu() {
-        let menu = NSMenu()
-        let title = state.muted ? "🔇 \(state.value)" : "🔊 \(state.value)"
-        statusItem.button?.title = title
-        menu.addItem(withTitle: "ScreenAudio", action: nil, keyEquivalent: "")
+    private func setUpPopover() {
+        viewModel = VolumeViewModel(state: state, deviceSummary: deviceSummaryText())
+        viewModel.onApply = { [weak self] next in self?.apply(next) }
 
-        menu.addItem(.separator())
-
-        let less = NSMenuItem(title: "− 10", action: #selector(dec), keyEquivalent: "")
-        less.target = self
-        let more = NSMenuItem(title: "+ 10", action: #selector(inc), keyEquivalent: "")
-        more.target = self
-        let mute = NSMenuItem(title: state.muted ? "取消静音" : "静音", action: #selector(toggleMute), keyEquivalent: "")
-        mute.target = self
-        menu.addItem(less)
-        menu.addItem(more)
-        menu.addItem(mute)
-        menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-        statusItem.menu = menu
+        popover = NSPopover()
+        popover.behavior = .transient            // 失焦自动关
+        popover.contentViewController = NSHostingController(
+            rootView: VolumePopoverView(model: viewModel, onQuit: { [weak self] in self?.quit() }))
     }
 
-    @objc private func inc() { apply(state.settingValue(state.value + 10)) }
-    @objc private func dec() { apply(state.settingValue(state.value - 10)) }
-    @objc private func toggleMute() { apply(state.settingMuted(!state.muted)) }
+    @objc private func togglePopover(_ sender: Any?) {
+        guard let button = statusItem.button else { return }
+        if popover.isShown { popover.performClose(nil) }
+        else { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
+    }
+
+    private func deviceSummaryText() -> String {
+        let devices = AudioDeviceResolver.listDevices()
+        let dell = AudioDeviceResolver.hdmiOutput(devices: devices).map { AudioDeviceResolver.deviceName($0) }
+        if !BlackHoleInstaller.isInstalled { return "未装 BlackHole" }
+        return dell.map { "● \($0)" } ?? "未找到 HDMI 设备"
+    }
 
     private func apply(_ next: VolumeState) {
         state = next
         engine?.setTargetGain(next.effectiveGain)
         store.save(next)
-        rebuildMenu()
+        viewModel?.value = next.value
+        viewModel?.muted = next.muted
+        statusItem.button?.title = next.muted ? "🔇 \(next.value)" : "🔊 \(next.value)"
     }
 
-    @objc private func quit() {
+    private func quit() {
         engine?.stop()
         engine = nil
         guard_.restore()
