@@ -301,7 +301,7 @@ public final class RingBuffer: @unchecked Sendable {
         precondition(capacitySamples > 0)
         self.capacity = capacitySamples
         self.buffer = .allocate(capacity: capacitySamples)
-        self.buffer.initialize(repeating: 0)
+        self.buffer.initialize(repeating: 0, count: capacitySamples)
     }
     deinit { buffer.deallocate() }
 
