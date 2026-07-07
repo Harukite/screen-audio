@@ -249,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for (i, w) in weights.enumerated() {
             let h = max(2.0, CGFloat(level) * w * size.height)
             let x = startX + CGFloat(i) * (barWidth + gap)
-            let rect = NSRect(x: x, y: (size.height - h) / 2, width: barWidth, height: h)
+            let rect = NSRect(x: x, y: 0, width: barWidth, height: h)
             let path = NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5)
             path.fill()
         }
