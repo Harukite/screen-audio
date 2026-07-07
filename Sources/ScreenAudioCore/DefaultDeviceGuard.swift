@@ -2,6 +2,10 @@ import CoreAudio
 import Foundation
 
 /// 启动时把默认输出设为 BlackHole（记下原值），退出时还原。
+///
+/// 防污染：若启动时默认输出已是 BlackHole（上次没还原留下的）或查询失败(0)，
+/// 不能把它当 original——否则 restore 会还原成 BlackHole，形成正反馈死锁。
+/// 此时改找真正的原设备（优先 HDMI/DELL，排除 BlackHole）。
 public final class DefaultDeviceGuard {
     private var original: AudioDeviceID?
 
@@ -9,11 +13,22 @@ public final class DefaultDeviceGuard {
 
     /// 记录当前默认输出，并切到 device。
     public func captureAndSet(to device: AudioDeviceID) {
-        original = Self.currentDefault()
+        let current = Self.currentDefault()
+        if current != 0 && current != device {
+            original = current
+            print("[Guard] captureAndSet: 当前默认 = \(Self.name(of: current))，目标 = \(Self.name(of: device)) → original 记为 \(Self.name(of: current))")
+        } else {
+            // 污染（current == device）或失败（0）：找真正的原设备
+            let found = Self.findRestorableOutput(excluding: device)
+            original = found
+            print("[Guard] captureAndSet: 当前默认 = \(Self.name(of: current)) 是 target/无效 → 找到 original = \(found.map { Self.name(of: $0) } ?? "nil")")
+        }
         Self.set(device)
     }
+
     /// 还原到启动前的默认输出。
     public func restore() {
+        print("[Guard] restore: original = \(original.map { Self.name(of: $0) } ?? "nil")")
         if let orig = original { Self.set(orig) }
         original = nil
     }
@@ -26,10 +41,12 @@ public final class DefaultDeviceGuard {
         )
         var id: AudioDeviceID = 0
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        _ = AudioObjectGetPropertyData(
+        let status = AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id)
+        if status != noErr { print("[Guard] currentDefault 查询失败 status=\(status)") }
         return id
     }
+
     private static func set(_ id: AudioDeviceID) {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -38,7 +55,22 @@ public final class DefaultDeviceGuard {
         )
         var did = id
         let size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        _ = AudioObjectSetPropertyData(
+        let status = AudioObjectSetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, size, &did)
+        print("[Guard] set(\(name(of: id))) status=\(status)")
+    }
+
+    /// 找可还原的输出设备（排除 target）：优先 HDMI（DELL），其次任意非 target / 非 BlackHole 设备。
+    private static func findRestorableOutput(excluding target: AudioDeviceID) -> AudioDeviceID? {
+        let devices = AudioDeviceResolver.listDevices()
+        if let hdmi = AudioDeviceResolver.hdmiOutput(devices: devices), hdmi != target {
+            return hdmi
+        }
+        return devices.first(where: { $0.id != target && !$0.name.contains("BlackHole") })?.id
+    }
+
+    private static func name(of id: AudioDeviceID) -> String {
+        let n = AudioDeviceResolver.deviceName(id)
+        return n.isEmpty ? "<id:\(id)>" : n
     }
 }
