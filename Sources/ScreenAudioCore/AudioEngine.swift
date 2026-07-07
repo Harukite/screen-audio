@@ -32,8 +32,9 @@ public final class AudioEngine: @unchecked Sendable {
     /// 仅输出回调线程访问（单线程，无需原子）。
     private var currentGain: Double = 0.0
 
-    /// 最近一次输出帧的 RMS 电平（0.0–1.0，已归一化/放大）。
-    /// 输出回调写、UI 状态栏读，故用原子。
+    /// 最近一次输入帧的源 RMS 电平（0.0–1.0，已放大归一化）。
+    /// 采源（BlackHole 输入）而非衰减后输出——音波反映"系统在播放音频"，
+    /// 不受音量/gain 影响（低音量也跳）。输入回调写、UI 状态栏读，故用原子。
     private let currentLevel = Atomic<Float>(0.0)
 
     /// 预分配输出临时缓冲（避免回调内堆分配）。
@@ -61,7 +62,7 @@ public final class AudioEngine: @unchecked Sendable {
         targetGain.store(max(0.0, min(1.0, gain)), ordering: .releasing)
     }
 
-    /// 当前输出电平（0.0–1.0，RMS，已放大归一化）。供状态栏音波读取。
+    /// 当前源电平（0.0–1.0，RMS，已放大归一化）。供状态栏音波读取。
     public func currentLevelValue() -> Float {
         currentLevel.load(ordering: .acquiring)
     }
@@ -69,8 +70,6 @@ public final class AudioEngine: @unchecked Sendable {
     public func start() throws {
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
-        // AudioDeviceIOProc 是 7 参数：device, now, inputData, inputTime,
-        // outputData, outputTime, clientData（见编译器给出的 @convention(c) 签名）。
         let inputProc: AudioDeviceIOProc = { _, _, inInputData, _, _, _, clientData in
             guard let clientData = clientData else { return noErr }
             let engine = Unmanaged<AudioEngine>.fromOpaque(clientData).takeUnretainedValue()
@@ -106,6 +105,7 @@ public final class AudioEngine: @unchecked Sendable {
             AudioDeviceStop(inputDevice, inID)
             throw EngineError.cannotStart("output status=\(status)")
         }
+        print("[Engine] started: input=\(AudioDeviceResolver.deviceName(inputDevice)), output=\(AudioDeviceResolver.deviceName(outputDevice))")
     }
 
     public func stop() {
@@ -122,9 +122,7 @@ public final class AudioEngine: @unchecked Sendable {
     }
 
     /// 切换输出 sink（中转模式换 HDMI 设备时用）。停旧 output IOProc → 换设备 → 重建。
-    /// output IOProc 闭包须在方法内重新声明（@convention(c) 闭包不能存为实例属性）。
     public func switchOutput(to newOutput: AudioDeviceID) throws {
-        // 停旧 output
         if let p = outputProcID {
             AudioDeviceStop(outputDevice, p)
             AudioDeviceDestroyIOProcID(outputDevice, p)
@@ -133,7 +131,6 @@ public final class AudioEngine: @unchecked Sendable {
         outputDevice = newOutput
         currentGain = 0   // 重置 ramp，防爆音
 
-        // 重建 output IOProc（闭包声明复用 start() 的形式）
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         let outputProc: AudioDeviceIOProc = { _, _, _, _, outOutputData, _, clientData in
             guard let clientData = clientData else { return noErr }
@@ -160,15 +157,26 @@ public final class AudioEngine: @unchecked Sendable {
 
     private func handleInput(_ ioData: UnsafePointer<AudioBufferList>) {
         let nBuffers = Int(ioData.pointee.mNumberBuffers)
-        // mBuffers 是 C 中的 trailing array (AudioBuffer mBuffers[1])；Swift 导入为单个
-        // AudioBuffer，无法下标。按字段偏移取首元素指针，逐个读取（无堆分配）。
         let buffers = Self.buffersPtr(ioData)
+        var sumSq: Float = 0
+        var total: Int = 0
         for i in 0..<nBuffers {
             let b = buffers[i]
             let frames = Int(b.mDataByteSize) / MemoryLayout<Float>.size
             if let data = b.mData?.assumingMemoryBound(to: Float.self), frames > 0 {
+                // 算源电平（BlackHole 输入，不受 gain）——音波反映"系统在播放音频"，
+                // 即使音量低/即将静音也能看到活动跳动。
+                for j in 0..<frames {
+                    sumSq += data[j] * data[j]
+                }
+                total += frames
                 _ = ringBuffer.write(data, count: frames)
             }
+        }
+        if total > 0 {
+            let rms = sqrt(sumSq / Float(total))
+            // 源 RMS 通常 0.05–0.3，放大 *4 让正常音频下音波明显跳动；clamp 0–1。
+            currentLevel.store(min(1.0, rms * 4.0), ordering: .releasing)
         }
     }
 
@@ -179,27 +187,15 @@ public final class AudioEngine: @unchecked Sendable {
 
         let nBuffers = Int(ioData.pointee.mNumberBuffers)
         let buffers = Self.buffersPtr(ioData)
-        // MVP：取第一个有 frames 的 buffer 算 RMS（多 buffer 时取主通道即可）。
-        var didSample = false
         for i in 0..<nBuffers {
             let b = buffers[i]
             let frames = Int(b.mDataByteSize) / MemoryLayout<Float>.size
             guard let data = b.mData?.assumingMemoryBound(to: Float.self), frames > 0 else { continue }
             let n = Swift.min(frames, tempFrames)
             let read = ringBuffer.read(tempBuffer, count: n)
-            let shouldSample = !didSample
-            var sumSq: Float = 0
             for j in 0..<n {
                 let s: Float = j < read ? tempBuffer[j] : 0   // underrun 补零
-                let out = s * g
-                data[j] = out
-                if shouldSample { sumSq += out * out }
-            }
-            if shouldSample {
-                // RMS 通常很小（0.0x），放大 *2.0 并 clamp 到 0–1，让正常音量下音波明显跳动。
-                let rms = sqrt(sumSq / Float(n))
-                currentLevel.store(min(1.0, rms * 2.0), ordering: .releasing)
-                didSample = true
+                data[j] = s * g
             }
         }
     }
