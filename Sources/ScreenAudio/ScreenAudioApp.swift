@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var state = VolumeState()
     private let store = VolumeStore()
     private var viewModel: VolumeViewModel!
+    private var levelTimer: Timer?
 
     private let panelWidth: CGFloat = 240
 
@@ -56,12 +57,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }()
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        // 固定宽度：title 含音量数字（拖滑块时变化），variableLength 会让 button 宽度
-        // 随数字位数变化 → panel 水平锚点漂移。固定 60pt 容下 "🔊 100"。
-        statusItem = NSStatusBar.system.statusItem(withLength: 60)
-        statusItem.button?.title = "🔊 \(state.value)"
+        // 固定宽度：状态栏渲染 3 根音波竖条（28pt 图像 + 留白），40pt 足够。
+        statusItem = NSStatusBar.system.statusItem(withLength: 40)
+        statusItem.button?.image = Self.waveformImage(level: 0)
+        statusItem.button?.image?.isTemplate = true   // 追随深浅色
         statusItem.button?.action = #selector(togglePanel(_:))
         statusItem.button?.target = self
+        // 启动电平刷新（30fps）：Timer 回调不在 MainActor，跳主线程刷 image。
+        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshWaveform() }
+        }
 
         // 若 BlackHole 未装，仅构造 panel 显示安装提示；否则尝试启动中转。
         if !BlackHoleInstaller.isInstalled {
@@ -87,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             engine?.setTargetGain(state.effectiveGain)
             setUpPanel()
         } catch {
-            statusItem.button?.title = "⚠️"
+            // 引擎启动失败：image 保持 level=0（refreshWaveform 读 engine==nil → 0，静止矮条）。
             print("AudioEngine start failed: \(error)")
             // 即使引擎启动失败也要构造 panel，否则点击图标会在 IUO 上崩溃。
             setUpPanel()
@@ -120,8 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             host.topAnchor.constraint(equalTo: blur.topAnchor),
             host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
         ])
-
-        statusItem.button?.title = state.muted ? "🔇 \(state.value)" : "🔊 \(state.value)"
+        // 状态栏视觉由 levelTimer 驱动 image 刷新，不再用 title。
     }
 
     @MainActor
@@ -208,6 +212,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .first
     }
 
+    // MARK: - 状态栏音波
+
+    /// 读取 AudioEngine 实时电平，刷新状态栏 image（30fps）。
+    @MainActor
+    private func refreshWaveform() {
+        let level = engine?.currentLevelValue() ?? 0
+        statusItem.button?.image = Self.waveformImage(level: level)
+    }
+
+    /// 绘制 3 根竖条音波；level 0.0–1.0，电平越高条越高。template 图像追随深浅色。
+    /// lockFocus 必须在主线程（用到当前 graphics context），refreshWaveform 已是 @MainActor。
+    private static func waveformImage(level: Float) -> NSImage {
+        let size = NSSize(width: 28, height: 16)
+        let image = NSImage(size: size)
+        image.isTemplate = true   // 每个新 image 都要设，否则不追随深浅色
+        image.lockFocus()
+        // 3 根条，中间最高、右侧次之、左侧最矮，加固定权重让形状像音波。
+        let weights: [CGFloat] = [0.55, 1.0, 0.7]
+        let barWidth: CGFloat = 4
+        let gap: CGFloat = 3
+        let totalWidth = CGFloat(weights.count) * barWidth + CGFloat(weights.count - 1) * gap
+        let startX = (size.width - totalWidth) / 2
+        NSColor.labelColor.setFill()
+        for (i, w) in weights.enumerated() {
+            let h = max(2.0, CGFloat(level) * w * size.height)
+            let x = startX + CGFloat(i) * (barWidth + gap)
+            let rect = NSRect(x: x, y: (size.height - h) / 2, width: barWidth, height: h)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5)
+            path.fill()
+        }
+        image.unlockFocus()
+        return image
+    }
+
     // MARK: - NSWindowDelegate
 
     func windowDidResignKey(_ notification: Notification) {
@@ -229,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.save(next)
         viewModel?.value = next.value
         viewModel?.muted = next.muted
-        statusItem.button?.title = next.muted ? "🔇 \(next.value)" : "🔊 \(next.value)"
+        // 状态栏 image 由 levelTimer 持续刷新，apply 不需手动更新。
     }
 
     private func quit() {

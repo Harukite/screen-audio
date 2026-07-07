@@ -15,20 +15,14 @@ struct VolumePopoverView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            // MARK: 状态图标 + 音量数字
-            VStack(spacing: 4) {
-                Text(model.statusIcon)
-                    .font(.system(size: 34))
-                    .animation(.snappy, value: model.muted)
-
-                Text("\(model.value)")
-                    .font(.system(size: 40, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(model.muted ? .secondary : .primary)
-                    .contentTransition(.numericText(value: 1))
-                    .animation(.snappy, value: model.value)
-                    .animation(.snappy, value: model.muted)
-            }
+            // MARK: 音量数字（顶部主视觉，居中放大）
+            Text("\(model.value)")
+                .font(.system(size: 40, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(model.muted ? .secondary : .primary)
+                .contentTransition(.numericText(value: 1))
+                .animation(.snappy, value: model.value)
+                .animation(.snappy, value: model.muted)
 
             // MARK: 横向音量滑块（原生）
             Slider(value: Binding(

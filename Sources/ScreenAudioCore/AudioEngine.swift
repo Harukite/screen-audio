@@ -32,6 +32,10 @@ public final class AudioEngine: @unchecked Sendable {
     /// 仅输出回调线程访问（单线程，无需原子）。
     private var currentGain: Double = 0.0
 
+    /// 最近一次输出帧的 RMS 电平（0.0–1.0，已归一化/放大）。
+    /// 输出回调写、UI 状态栏读，故用原子。
+    private let currentLevel = Atomic<Float>(0.0)
+
     /// 预分配输出临时缓冲（避免回调内堆分配）。
     private let tempFrames = 4096
     private let tempBuffer: UnsafeMutablePointer<Float>
@@ -55,6 +59,11 @@ public final class AudioEngine: @unchecked Sendable {
     /// UI 调用：设目标 gain（0.0–1.0）。
     public func setTargetGain(_ gain: Double) {
         targetGain.store(max(0.0, min(1.0, gain)), ordering: .releasing)
+    }
+
+    /// 当前输出电平（0.0–1.0，RMS，已放大归一化）。供状态栏音波读取。
+    public func currentLevelValue() -> Float {
+        currentLevel.load(ordering: .acquiring)
     }
 
     public func start() throws {
@@ -135,15 +144,27 @@ public final class AudioEngine: @unchecked Sendable {
 
         let nBuffers = Int(ioData.pointee.mNumberBuffers)
         let buffers = Self.buffersPtr(ioData)
+        // MVP：取第一个有 frames 的 buffer 算 RMS（多 buffer 时取主通道即可）。
+        var didSample = false
         for i in 0..<nBuffers {
             let b = buffers[i]
             let frames = Int(b.mDataByteSize) / MemoryLayout<Float>.size
             guard let data = b.mData?.assumingMemoryBound(to: Float.self), frames > 0 else { continue }
             let n = Swift.min(frames, tempFrames)
             let read = ringBuffer.read(tempBuffer, count: n)
+            let shouldSample = !didSample
+            var sumSq: Float = 0
             for j in 0..<n {
                 let s: Float = j < read ? tempBuffer[j] : 0   // underrun 补零
-                data[j] = s * g
+                let out = s * g
+                data[j] = out
+                if shouldSample { sumSq += out * out }
+            }
+            if shouldSample {
+                // RMS 通常很小（0.0x），放大 *2.0 并 clamp 到 0–1，让正常音量下音波明显跳动。
+                let rms = sqrt(sumSq / Float(n))
+                currentLevel.store(min(1.0, rms * 2.0), ordering: .releasing)
+                didSample = true
             }
         }
     }
