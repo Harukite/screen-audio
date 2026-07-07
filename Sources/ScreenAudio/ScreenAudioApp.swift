@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.behavior = .transient            // 失焦自动关
         popover.contentViewController = NSHostingController(
             rootView: VolumePopoverView(model: viewModel, onQuit: { [weak self] in self?.quit() }))
+        statusItem.button?.title = state.muted ? "🔇 \(state.value)" : "🔊 \(state.value)"
     }
 
     @objc private func togglePopover(_ sender: Any?) {
