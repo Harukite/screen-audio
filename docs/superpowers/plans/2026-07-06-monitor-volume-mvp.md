@@ -101,7 +101,7 @@ final class PerceivedVolumeTests: XCTestCase {
     func testRoundTrip() {
         for v in stride(from: 0, through: 100, by: 5) {
             let back = PerceivedVolume.toValue(PerceivedVolume.toGain(v))
-            XCTAssertEqual(back, v, accuracy: 1.0, "value \(v) not round-tripping")
+            XCTAssertEqual(back, v, accuracy: 1, "value \(v) not round-tripping")
         }
     }
 }
@@ -911,11 +911,21 @@ git commit -m "feat: add BlackHoleInstaller detection"
 ## Task 10：菜单栏 App 骨架（NSStatusItem + 退出还原）
 
 **Files:**
+- Delete: `Sources/ScreenAudio/main.swift`
 - Create: `Sources/ScreenAudio/ScreenAudioApp.swift`
 
+> ⚠️ **先删 `main.swift`**：Swift 一个 executable target 只能有一个 entry point。脚手架的 `main.swift`（隐式入口）与本 task 的 `@main struct ScreenAudioApp` 冲突，共存会编译报错。先删它再写 App。
 > 这一步先建能跑的最小菜单栏 App（图标 + 菜单 + accessory policy），确认 SwiftPM 能跑 GUI。下一步加 popover + 滑块。
 
-- [ ] **Step 1：写最小 App**
+- [ ] **Step 1：删除 main.swift，写最小 App**
+
+先删脚手架入口（与下面 `@main` 冲突，不删会编译报错）：
+
+```bash
+rm Sources/ScreenAudio/main.swift
+```
+
+然后写 App：
 
 ```swift
 import AppKit
