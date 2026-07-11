@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var levelTimer: Timer?
     private var waveformHeights: [Float] = [0, 0, 0]   // 3 根条的平滑高度，各位独立衰减
 
+    private let settingsStore = SettingsStore()
+    private var settingsState = SettingsState.default
+    private var showSettings = false
+
     /// 中转模式：BlackHole → 设备（gain 控音量）；直通模式：默认输出设备（系统音量控）。
     private enum OutputMode { case transfer, direct }
     private var outputMode: OutputMode = .transfer
@@ -70,6 +74,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.button?.image?.isTemplate = true   // 追随深浅色
         statusItem.button?.action = #selector(togglePanel(_:))
         statusItem.button?.target = self
+
+        // 读取设置 + 同步开机自启
+        settingsState = settingsStore.load()
+        if settingsState.launchAtLogin && !LaunchAgentManager.isEnabled {
+            let execPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
+            try? LaunchAgentManager.setEnabled(true, executablePath: execPath)
+            LaunchAgentManager.load()
+        }
+
         // 启动电平刷新（30fps）：Timer 回调不在 MainActor，跳主线程刷 image。
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshWaveform() }
@@ -109,6 +122,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func setUpPanel() {
+        if showSettings {
+            let settingsModel = SettingsViewModel(settings: settingsState)
+            settingsModel.onSave = { [weak self] s in self?.saveSettings(s) }
+            settingsModel.onBack = { [weak self] in self?.switchToVolume() }
+            let host = NSHostingView(rootView: SettingsView(model: settingsModel))
+            host.translatesAutoresizingMaskIntoConstraints = false
+
+            guard let blur = panel.contentView as? NSVisualEffectView else { return }
+            blur.subviews.forEach { $0.removeFromSuperview() }
+            blur.addSubview(host)
+            NSLayoutConstraint.activate([
+                host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+                host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+                host.topAnchor.constraint(equalTo: blur.topAnchor),
+                host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+            ])
+            return
+        }
+
         viewModel = VolumeViewModel(
             state: state,
             deviceSummary: deviceSummaryText(),
@@ -119,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewModel.onApply = { [weak self] next in self?.apply(next) }
         viewModel.onInstall = { [weak self] in self?.installBlackHole() }
         viewModel.onSwitchOutput = { [weak self] id in self?.switchOutputDevice(to: id) }
+        viewModel.onSettings = { [weak self] in self?.switchToSettings() }
 
         // 每次重建 hosting view，保证 model 更新生效。
         let host = NSHostingView(
@@ -217,11 +250,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         })
     }
 
-    private func hostingView() -> NSHostingView<VolumePopoverView>? {
+    private func hostingView() -> NSView? {
         (panel.contentView as? NSVisualEffectView)?
             .subviews
-            .compactMap { $0 as? NSHostingView<VolumePopoverView> }
             .first
+    }
+
+    // MARK: - 设置导航
+
+    @MainActor
+    private func switchToSettings() {
+        showSettings = true
+        setUpPanel()
+        positionPanel()
+        if !panel.isVisible { showPanel() }
+    }
+
+    @MainActor
+    private func switchToVolume() {
+        showSettings = false
+        setUpPanel()
+        positionPanel()
+    }
+
+    @MainActor
+    private func saveSettings(_ s: SettingsState) {
+        settingsState = s
+        settingsStore.save(s)
+        // 同步开机自启
+        let execPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
+        do {
+            try LaunchAgentManager.setEnabled(s.launchAtLogin, executablePath: execPath)
+            if s.launchAtLogin { LaunchAgentManager.load() }
+            else { LaunchAgentManager.unload() }
+        } catch {
+            print("[Settings] LaunchAgent 操作失败: \(error)")
+        }
     }
 
     // MARK: - 状态栏音波
@@ -230,14 +294,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @MainActor
     private func refreshWaveform() {
         let raw = max(0, engine?.currentLevelValue() ?? 0)
-        let weights: [Float] = [0.55, 1.0, 0.7]
-        // 每根条独立：瞬时峰值拉起，缓衰减下落（0.90 / 帧 ≈ 30fps 约 1.5 秒回落）
+        let preset = settingsState.waveformPreset
+        let weights = preset.weights
+        let d = settingsState.decaySpeed.coefficient
+
+        // 确保 waveformHeights 长度匹配 barCount（预设切换时重建）
+        if waveformHeights.count != preset.barCount {
+            waveformHeights = Array(repeating: 0, count: preset.barCount)
+        }
+
+        // 每根条独立：瞬时峰值拉起，缓衰减下落
         for i in waveformHeights.indices {
             let target = raw * weights[i]
             if target >= waveformHeights[i] {
                 waveformHeights[i] = target        // 上升：即时拉满
             } else {
-                waveformHeights[i] += (target - waveformHeights[i]) * 0.10   // 下落：缓衰减（自由落体感）
+                waveformHeights[i] += (target - waveformHeights[i]) * d   // 下落：缓衰减（自由落体感）
             }
         }
         statusItem.button?.image = Self.waveformImage(heights: waveformHeights)

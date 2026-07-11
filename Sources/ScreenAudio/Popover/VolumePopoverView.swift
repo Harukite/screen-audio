@@ -100,6 +100,11 @@ struct VolumePopoverView: View {
                 }
 
                 HStack(spacing: 8) {
+                    Button { model.onSettings?() } label: {
+                        Image(systemName: "gear")
+                    }
+                    .buttonStyle(.borderless)
+
                     Button(model.muted ? "取消静音" : "静音") {
                         model.toggleMute()
                     }
@@ -131,6 +136,7 @@ final class VolumeViewModel: ObservableObject {
     var onApply: ((VolumeState) -> Void)?
     var onInstall: (() -> Void)?
     var onSwitchOutput: ((AudioDeviceID) -> Void)?
+    var onSettings: (() -> Void)?
 
     init(state: VolumeState, deviceSummary: String, installNeeded: Bool = false) {
         self.value = state.value
