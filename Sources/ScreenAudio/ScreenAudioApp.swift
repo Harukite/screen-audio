@@ -152,10 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @MainActor
     private func openSettings() {
         print("[DEBUG] openSettings called")
-        if let sp = settingsPanel {
-            sp.makeKeyAndOrderFront(nil)
-            return
-        }
+        // 关旧窗口再新建——避免关闭后 makeKeyAndOrderFront 不生效的问题
+        settingsPanel?.orderOut(nil)
+        settingsPanel = nil
+
         let settingsVM = SettingsViewModel(settings: settingsState)
         settingsVM.onSave = { [weak self] s in self?.saveSettings(s) }
 
