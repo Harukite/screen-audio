@@ -167,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             styleMask: [.titled, .closable, .resizable, .utilityWindow],
             backing: .buffered, defer: false)
         sp.title = "ScreenAudio 设置"
+        sp.level = .floating                     // 浮在最前，不被遮挡
         sp.isReleasedWhenClosed = false
         sp.center()
 
@@ -176,7 +177,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sp.contentView = host
 
         settingsPanel = sp
-        sp.orderFrontRegardless()
+        // accessory app 默认无焦，必须激活才能显示独立窗口
+        NSApp.activate(ignoringOtherApps: true)
+        sp.makeKeyAndOrderFront(nil)
     }
 
     @MainActor
