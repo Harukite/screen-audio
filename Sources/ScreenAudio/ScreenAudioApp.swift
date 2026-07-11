@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var state = VolumeState()
     private let store = VolumeStore()
     private var viewModel: VolumeViewModel!
+    private var settingsModel: SettingsViewModel!
     private var levelTimer: Timer?
     private var waveformHeights: [Float] = [0, 0, 0]   // 3 根条的平滑高度，各位独立衰减
 
@@ -67,6 +68,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }()
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // ===== Eternal ViewModels (never recreated — PanelRootView holds @ObservedObject references) =====
+        viewModel = VolumeViewModel(
+            state: state,
+            deviceSummary: deviceSummaryText(),
+            installNeeded: !BlackHoleInstaller.isInstalled
+        )
+        viewModel.onApply = { [weak self] next in self?.apply(next) }
+        viewModel.onInstall = { [weak self] in self?.installBlackHole() }
+        viewModel.onSwitchOutput = { [weak self] id in self?.switchOutputDevice(to: id) }
+        viewModel.onSettings = { [weak self] in self?.switchToSettings() }
+
+        settingsModel = SettingsViewModel(settings: settingsState)
+        settingsModel.onSave = { [weak self] s in self?.saveSettings(s) }
+        settingsModel.onBack = { [weak self] in self?.switchToVolume() }
+
+        // ===== statusItem =====
         // 固定宽度：状态栏渲染 3 根音波竖条（28pt 图像 + 留白），40pt 足够。
         statusItem = NSStatusBar.system.statusItem(withLength: 40)
         statusItem.button?.image = Self.waveformImage(heights: [0, 0, 0])
@@ -74,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.button?.action = #selector(togglePanel(_:))
         statusItem.button?.target = self
 
-        // 读取设置 + 同步开机自启
+        // ===== 读取设置 + 同步开机自启 =====
         settingsState = settingsStore.load()
         if settingsState.launchAtLogin && !LaunchAgentManager.isEnabled {
             let execPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
@@ -82,15 +99,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             LaunchAgentManager.load()
         }
 
-        // 启动电平刷新（30fps）：Timer 回调不在 MainActor，跳主线程刷 image。
+        // ===== 创建 Host（仅一次）=====
+        guard let blur = panel.contentView as? NSVisualEffectView else { return }
+        let host = NSHostingView(rootView: PanelRootView(
+            volumeVM: viewModel,
+            settingsVM: settingsModel,
+            onQuit: { [weak self] in self?.quit() }
+        ))
+        host.translatesAutoresizingMaskIntoConstraints = false
+        host.wantsLayer = true
+        host.layer?.backgroundColor = .clear
+        blur.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+            host.topAnchor.constraint(equalTo: blur.topAnchor),
+            host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+        ])
+
+        // ===== 启动电平刷新（30fps）=====
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshWaveform() }
         }
 
-        // 若 BlackHole 未装，仅构造 panel 显示安装提示；否则尝试启动中转。
+        // ===== 若 BlackHole 未装，仅构造 panel 显示安装提示；否则尝试启动中转 =====
         if !BlackHoleInstaller.isInstalled {
             state = VolumeState(value: 50)
-            setUpPanel()
+            refreshVolumeUI()
             return
         }
         startEngineIfPossible()
@@ -100,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let devices = AudioDeviceResolver.listDevices()
         guard let bh = AudioDeviceResolver.blackHole(devices: devices),
               let dell = AudioDeviceResolver.hdmiOutput(devices: devices) else {
-            setUpPanel()
+            refreshVolumeUI()
             return
         }
         do {
@@ -111,57 +146,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             currentOutputDevice = dell
             if let saved = store.load() { state = saved }
             engine?.setTargetGain(state.effectiveGain)
-            setUpPanel()
+            refreshVolumeUI()
         } catch {
             // 引擎启动失败：image 保持 level=0（refreshWaveform 读 engine==nil → 0，静止矮条）。
             print("AudioEngine start failed: \(error)")
             // 即使引擎启动失败也要构造 panel，否则点击图标会在 IUO 上崩溃。
-            setUpPanel()
+            refreshVolumeUI()
         }
     }
 
-    private var setupDone = false   // NSHostingView created once, never swapped
-
-    private func setUpPanel() {
-        // ===== 每一个调用路径都准备 ViewModel =====
-        viewModel = VolumeViewModel(
-            state: state,
-            deviceSummary: deviceSummaryText(),
-            installNeeded: !BlackHoleInstaller.isInstalled
-        )
+    /// 更新面板数据（不重建 host/ViewModel，只改 @Published 属性使 SwiftUI 重渲染）。
+    @MainActor
+    private func refreshVolumeUI() {
+        viewModel.value = state.value
+        viewModel.muted = state.muted
+        viewModel.deviceSummary = deviceSummaryText()
+        viewModel.installNeeded = !BlackHoleInstaller.isInstalled
         viewModel.outputDevices = availableOutputDevices()
         viewModel.currentOutputDeviceID = currentOutputDevice
-        viewModel.onApply = { [weak self] next in self?.apply(next) }
-        viewModel.onInstall = { [weak self] in self?.installBlackHole() }
-        viewModel.onSwitchOutput = { [weak self] id in self?.switchOutputDevice(to: id) }
-        viewModel.onSettings = { [weak self] in self?.switchToSettings() }
-
-        let settingsModel = SettingsViewModel(settings: settingsState)
-        settingsModel.onSave = { [weak self] s in self?.saveSettings(s) }
-        settingsModel.onBack = { [weak self] in self?.switchToVolume() }
-
-        guard let blur = panel.contentView as? NSVisualEffectView else { return }
-
-        // ===== first call: create host once, add to blur, never swap =====
-        if !setupDone {
-            let host = NSHostingView(rootView: PanelRootView(
-                volumeVM: viewModel,
-                settingsVM: settingsModel,
-                onQuit: { [weak self] in self?.quit() }
-            ))
-            host.translatesAutoresizingMaskIntoConstraints = false
-            host.wantsLayer = true
-            host.layer?.backgroundColor = .clear
-            blur.addSubview(host)
-            NSLayoutConstraint.activate([
-                host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
-                host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
-                host.topAnchor.constraint(equalTo: blur.topAnchor),
-                host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
-            ])
-            setupDone = true
-        }
+        settingsModel.settings = settingsState  // @Published → 设置视图也用最新状态
     }
+
     func installBlackHole() {
         viewModel?.deviceSummary = "正在安装 BlackHole…（请在弹出的密码框输入 Mac 密码）"
         viewModel?.installNeeded = false
@@ -261,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @MainActor
     private func saveSettings(_ s: SettingsState) {
         settingsState = s
+        settingsModel.settings = s  // 同步 @Published 给面板视图
         settingsStore.save(s)
         // 同步开机自启
         let execPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
