@@ -153,12 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @MainActor
     private func openSettings() {
         print("[DEBUG] openSettings called")
-        // 已存在就前置
-        if let sp = settingsPanel, sp.isVisible {
+        if let sp = settingsPanel {
             sp.makeKeyAndOrderFront(nil)
             return
         }
-        // 新建
         let settingsVM = SettingsViewModel(settings: settingsState)
         settingsVM.onSave = { [weak self] s in self?.saveSettings(s) }
         settingsVM.onBack = { [weak self] in self?.closeSettings() }
@@ -166,11 +164,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let sp = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 280, height: 360),
-            styleMask: [.titled, .closable, .nonactivatingPanel],
+            styleMask: [.titled, .closable, .resizable, .utilityWindow],
             backing: .buffered, defer: false)
         sp.title = "ScreenAudio 设置"
         sp.isReleasedWhenClosed = false
-        sp.delegate = self
         sp.center()
 
         let host = NSHostingView(rootView: SettingsView(model: settingsVM))
@@ -179,9 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sp.contentView = host
 
         settingsPanel = sp
-        sp.makeKeyAndOrderFront(nil)
-        // 强制前置确保可见
-        NSApp.activate(ignoringOtherApps: true)
+        sp.orderFrontRegardless()
     }
 
     @MainActor
@@ -195,8 +190,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let execPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
         do {
             try LaunchAgentManager.setEnabled(s.launchAtLogin, executablePath: execPath)
-            if s.launchAtLogin { LaunchAgentManager.load() }
-            else { LaunchAgentManager.unload() }
+            // launchctl 仅在本次操作有效时才调用 load/unload
+            if s.launchAtLogin && FileManager.default.fileExists(atPath: LaunchAgentManager.plistURL.path) {
+                LaunchAgentManager.load()
+            } else if !s.launchAtLogin {
+                // 已在 LaunchAgentManager.setEnabled(false) 删了 plist
+            }
         } catch {
             print("[Settings] LaunchAgent 操作失败: \(error)")
         }
