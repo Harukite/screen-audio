@@ -254,13 +254,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @MainActor
     private func switchToSettings() {
         viewModel?.showSettings = true
-        positionPanel()
+        // SwiftUI 还没渲染新视图（display cycle 在后面），立即读 fittingSize 拿到的
+        // 是旧视图高度 → setContentSize 用旧值 → display cycle 来后新视图 layout 冲突 → crash。
+        // 延迟到下一个 run loop，等 SwiftUI 渲染完成再定位。
+        DispatchQueue.main.async { [weak self] in self?.positionPanel() }
     }
 
     @MainActor
     private func switchToVolume() {
         viewModel?.showSettings = false
-        positionPanel()
+        DispatchQueue.main.async { [weak self] in self?.positionPanel() }
     }
 
     @MainActor
