@@ -260,17 +260,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @MainActor
     private func switchToSettings() {
+        let wasVisible = panel.isVisible
+        if wasVisible { panel.orderOut(nil) }
         showSettings = true
         setUpPanel()
         positionPanel()
-        if !panel.isVisible { showPanel() }
+        if wasVisible { panel.makeKeyAndOrderFront(nil) }
     }
 
     @MainActor
     private func switchToVolume() {
+        let wasVisible = panel.isVisible
+        if wasVisible { panel.orderOut(nil) }
         showSettings = false
         setUpPanel()
         positionPanel()
+        if wasVisible { panel.makeKeyAndOrderFront(nil) }
     }
 
     @MainActor
