@@ -27,7 +27,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private let settingsStore = SettingsStore()
     private var settingsState = SettingsState.default
-    private var showSettings = false
 
     /// 中转模式：BlackHole → 设备（gain 控音量）；直通模式：默认输出设备（系统音量控）。
     private enum OutputMode { case transfer, direct }
@@ -121,26 +120,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private var setupDone = false   // NSHostingView created once, never swapped
+
     private func setUpPanel() {
-        if showSettings {
-            let settingsModel = SettingsViewModel(settings: settingsState)
-            settingsModel.onSave = { [weak self] s in self?.saveSettings(s) }
-            settingsModel.onBack = { [weak self] in self?.switchToVolume() }
-            let host = NSHostingView(rootView: SettingsView(model: settingsModel))
-            host.translatesAutoresizingMaskIntoConstraints = false
-
-            guard let blur = panel.contentView as? NSVisualEffectView else { return }
-            blur.subviews.forEach { $0.removeFromSuperview() }
-            blur.addSubview(host)
-            NSLayoutConstraint.activate([
-                host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
-                host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
-                host.topAnchor.constraint(equalTo: blur.topAnchor),
-                host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
-            ])
-            return
-        }
-
+        // ===== 每一个调用路径都准备 ViewModel =====
         viewModel = VolumeViewModel(
             state: state,
             deviceSummary: deviceSummaryText(),
@@ -153,27 +136,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewModel.onSwitchOutput = { [weak self] id in self?.switchOutputDevice(to: id) }
         viewModel.onSettings = { [weak self] in self?.switchToSettings() }
 
-        // 每次重建 hosting view，保证 model 更新生效。
-        let host = NSHostingView(
-            rootView: VolumePopoverView(model: viewModel, onQuit: { [weak self] in self?.quit() }))
-        host.translatesAutoresizingMaskIntoConstraints = false
-        host.wantsLayer = true
-        // hosting 背景透明，让 blur 显示；圆角交给 blur 层裁剪。
-        host.layer?.backgroundColor = .clear
+        let settingsModel = SettingsViewModel(settings: settingsState)
+        settingsModel.onSave = { [weak self] s in self?.saveSettings(s) }
+        settingsModel.onBack = { [weak self] in self?.switchToVolume() }
 
         guard let blur = panel.contentView as? NSVisualEffectView else { return }
-        blur.subviews.forEach { $0.removeFromSuperview() }
-        blur.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
-            host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
-            host.topAnchor.constraint(equalTo: blur.topAnchor),
-            host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
-        ])
-        // 状态栏视觉由 levelTimer 驱动 image 刷新，不再用 title。
-    }
 
-    @MainActor
+        // ===== first call: create host once, add to blur, never swap =====
+        if !setupDone {
+            let host = NSHostingView(rootView: PanelRootView(
+                volumeVM: viewModel,
+                settingsVM: settingsModel,
+                onQuit: { [weak self] in self?.quit() }
+            ))
+            host.translatesAutoresizingMaskIntoConstraints = false
+            host.wantsLayer = true
+            host.layer?.backgroundColor = .clear
+            blur.addSubview(host)
+            NSLayoutConstraint.activate([
+                host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+                host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+                host.topAnchor.constraint(equalTo: blur.topAnchor),
+                host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+            ])
+            setupDone = true
+        }
+    }
     func installBlackHole() {
         viewModel?.deviceSummary = "正在安装 BlackHole…（请在弹出的密码框输入 Mac 密码）"
         viewModel?.installNeeded = false
@@ -260,22 +248,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @MainActor
     private func switchToSettings() {
-        let wasVisible = panel.isVisible
-        if wasVisible { panel.orderOut(nil) }
-        showSettings = true
-        setUpPanel()
+        viewModel?.showSettings = true
         positionPanel()
-        if wasVisible { panel.makeKeyAndOrderFront(nil) }
     }
 
     @MainActor
     private func switchToVolume() {
-        let wasVisible = panel.isVisible
-        if wasVisible { panel.orderOut(nil) }
-        showSettings = false
-        setUpPanel()
+        viewModel?.showSettings = false
         positionPanel()
-        if wasVisible { panel.makeKeyAndOrderFront(nil) }
     }
 
     @MainActor
