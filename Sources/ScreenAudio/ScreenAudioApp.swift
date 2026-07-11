@@ -22,9 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var state = VolumeState()
     private let store = VolumeStore()
     private var viewModel: VolumeViewModel!
-    private var settingsModel: SettingsViewModel!
     private var levelTimer: Timer?
-    private var waveformHeights: [Float] = [0, 0, 0]   // 3 根条的平滑高度，各位独立衰减
+    private var waveformHeights: [Float] = [0, 0, 0]
 
     private let settingsStore = SettingsStore()
     private var settingsState = SettingsState.default
@@ -36,8 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private let panelWidth: CGFloat = 240
 
-    /// 无边框 NSPanel：毛玻璃 popover 材质 + 圆角，浮在菜单栏层。
-    /// 替代 NSPopover 以紧贴菜单栏下方（无箭头、无默认边框），现代菜单栏 App 风格。
+    /// 主音量面板
     private lazy var panel: NSPanel = {
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: 400),
@@ -47,16 +45,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         p.titlebarAppearsTransparent = true
         p.isMovableByWindowBackground = false
         p.hidesOnDeactivate = false
-        p.level = .statusBar                       // 浮在菜单栏层
+        p.level = .statusBar
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.isReleasedWhenClosed = false
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
-        p.delegate = self                           // windowDidResignKey 失焦关闭
-        // 毛玻璃背景（系统 popover 材质）+ 圆角裁剪
-        let blur = NSVisualEffectView(
-            frame: NSRect(x: 0, y: 0, width: panelWidth, height: 400))
+        p.delegate = self
+        let blur = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 400))
         blur.material = .popover
         blur.blendingMode = .behindWindow
         blur.state = .active
@@ -67,8 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return p
     }()
 
+    /// 独立设置面板（点齿轮弹出，独立 NSHostingView，不和音量面板冲突）
+    private var settingsPanel: NSPanel?
+    private var settingsVM: SettingsViewModel?
+
     func applicationDidFinishLaunching(_ note: Notification) {
-        // ===== Eternal ViewModels (never recreated — PanelRootView holds @ObservedObject references) =====
+        // — ViewModel —
         viewModel = VolumeViewModel(
             state: state,
             deviceSummary: deviceSummaryText(),
@@ -77,21 +77,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewModel.onApply = { [weak self] next in self?.apply(next) }
         viewModel.onInstall = { [weak self] in self?.installBlackHole() }
         viewModel.onSwitchOutput = { [weak self] id in self?.switchOutputDevice(to: id) }
-        viewModel.onSettings = { [weak self] in self?.switchToSettings() }
+        viewModel.onSettings = { [weak self] in self?.openSettings() }
 
-        settingsModel = SettingsViewModel(settings: settingsState)
-        settingsModel.onSave = { [weak self] s in self?.saveSettings(s) }
-        settingsModel.onBack = { [weak self] in self?.switchToVolume() }
-
-        // ===== statusItem =====
-        // 固定宽度：状态栏渲染 3 根音波竖条（28pt 图像 + 留白），40pt 足够。
+        // — statusItem —
         statusItem = NSStatusBar.system.statusItem(withLength: 40)
         statusItem.button?.image = Self.waveformImage(heights: [0, 0, 0])
-        statusItem.button?.image?.isTemplate = true   // 追随深浅色
+        statusItem.button?.image?.isTemplate = true
         statusItem.button?.action = #selector(togglePanel(_:))
         statusItem.button?.target = self
 
-        // ===== 读取设置 + 同步开机自启 =====
+        // — 读取设置 —
         settingsState = settingsStore.load()
         if settingsState.launchAtLogin && !LaunchAgentManager.isEnabled {
             let execPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
@@ -99,28 +94,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             LaunchAgentManager.load()
         }
 
-        // ===== 创建 Host（仅一次，用 autoresizingMask 不用 Auto Layout ——
-        // Auto Layout 和 NSHostingView.displayCycle 冲突导致 invalidateSafeAreaInsets crash）=====
+        // — 主 Host（纯 VolumePopoverView，永不重建）—
         guard let blur = panel.contentView as? NSVisualEffectView else { return }
-        // panel 高度固定 400pt（够放两个视图），避免 setContentSize 触发动态重布局
-        panel.setContentSize(NSSize(width: panelWidth, height: 400))
-        let host = NSHostingView(rootView: PanelRootView(
-            volumeVM: viewModel,
-            settingsVM: settingsModel,
-            onQuit: { [weak self] in self?.quit() }
-        ))
+        let host = NSHostingView(rootView: VolumePopoverView(model: viewModel, onQuit: { [weak self] in self?.quit() }))
         host.frame = blur.bounds
-        host.autoresizingMask = [.width, .height]  // 跟随 blur 尺寸，不用 constraints
+        host.autoresizingMask = [.width, .height]
         host.wantsLayer = true
         host.layer?.backgroundColor = .clear
         blur.addSubview(host)
 
-        // ===== 启动电平刷新（30fps）=====
+        // — 音波 Timer —
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshWaveform() }
         }
 
-        // ===== 若 BlackHole 未装，仅构造 panel 显示安装提示；否则尝试启动中转 =====
+        // — 启动 —
         if !BlackHoleInstaller.isInstalled {
             state = VolumeState(value: 50)
             refreshVolumeUI()
@@ -146,14 +134,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             engine?.setTargetGain(state.effectiveGain)
             refreshVolumeUI()
         } catch {
-            // 引擎启动失败：image 保持 level=0（refreshWaveform 读 engine==nil → 0，静止矮条）。
             print("AudioEngine start failed: \(error)")
-            // 即使引擎启动失败也要构造 panel，否则点击图标会在 IUO 上崩溃。
             refreshVolumeUI()
         }
     }
 
-    /// 更新面板数据（不重建 host/ViewModel，只改 @Published 属性使 SwiftUI 重渲染）。
     @MainActor
     private func refreshVolumeUI() {
         viewModel.value = state.value
@@ -162,61 +147,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewModel.installNeeded = !BlackHoleInstaller.isInstalled
         viewModel.outputDevices = availableOutputDevices()
         viewModel.currentOutputDeviceID = currentOutputDevice
-        settingsModel.settings = settingsState  // @Published → 设置视图也用最新状态
     }
 
-    func installBlackHole() {
-        viewModel?.deviceSummary = "正在安装 BlackHole…（请在弹出的密码框输入 Mac 密码）"
-        viewModel?.installNeeded = false
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result: Result<Void, Error>
-            do {
-                try BlackHoleInstaller.install()
-                result = .success(())
-            } catch {
-                result = .failure(error)
-            }
-            Task { @MainActor in self.handleInstallResult(result) }
+    // MARK: — 独立设置面板 —
+    @MainActor
+    private func openSettings() {
+        // 已存在就前置
+        if let sp = settingsPanel, sp.isVisible {
+            sp.makeKeyAndOrderFront(nil)
+            return
         }
+        // 新建
+        let settingsVM = SettingsViewModel(settings: settingsState)
+        settingsVM.onSave = { [weak self] s in self?.saveSettings(s) }
+        settingsVM.onBack = { [weak self] in self?.closeSettings() }
+        self.settingsVM = settingsVM
+
+        let sp = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 280, height: 360),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered, defer: false)
+        sp.title = "ScreenAudio 设置"
+        sp.isReleasedWhenClosed = false
+        sp.delegate = self
+        sp.center()
+
+        let host = NSHostingView(rootView: SettingsView(model: settingsVM))
+        host.frame = NSRect(x: 0, y: 0, width: 280, height: 360)
+        host.autoresizingMask = [.width, .height]
+        sp.contentView = host
+
+        settingsPanel = sp
+        sp.makeKeyAndOrderFront(nil)
     }
 
     @MainActor
-    func handleInstallResult(_ result: Result<Void, Error>) {
-        switch result {
-        case .success:
-            if BlackHoleInstaller.isInstalled {
-                // 装好了，重新启动引擎流程（内部会 setUpPanel 刷新状态）
-                viewModel?.deviceSummary = "BlackHole 已安装，启动中…"
-                startEngineIfPossible()
-            } else {
-                viewModel?.deviceSummary = "安装未生效，请检查后重启 App"
-                viewModel?.installNeeded = true
-            }
-        case .failure(let error):
-            viewModel?.deviceSummary = "安装失败：\(error)"
-            viewModel?.installNeeded = true
+    private func closeSettings() {
+        settingsPanel?.orderOut(nil)
+    }
+
+    private func saveSettings(_ s: SettingsState) {
+        settingsState = s
+        settingsStore.save(s)
+        let execPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
+        do {
+            try LaunchAgentManager.setEnabled(s.launchAtLogin, executablePath: execPath)
+            if s.launchAtLogin { LaunchAgentManager.load() }
+            else { LaunchAgentManager.unload() }
+        } catch {
+            print("[Settings] LaunchAgent 操作失败: \(error)")
         }
     }
 
+    // MARK: — Panel toggle —
     @objc private func togglePanel(_ sender: Any?) {
-        if panel.isVisible {
-            closePanel()
-        } else {
-            showPanel()
-        }
+        if panel.isVisible { closePanel() }
+        else { showPanel() }
     }
 
-    /// 水平居中紧贴 statusItem.button 下方。高度依赖 SwiftUI 内容自适应（fittingSize）。
     private func positionPanel() {
-        // 面板高度固定 400pt（创建时 setContentSize），不再动态改。避免 setContentSize
-        // 触发 NSHostingView 的 invalidateSafeAreaInsets → Auto Layout crash。
-        let panelHeight: CGFloat = 400
-
         guard let button = statusItem.button, let win = button.window else { return }
         let buttonRect = win.convertToScreen(button.convert(button.bounds, to: nil))
         let origin = NSPoint(
             x: buttonRect.midX - panelWidth / 2,
-            y: buttonRect.minY - panelHeight - 6)   // 紧贴菜单栏下方，留 6pt
+            y: buttonRect.minY - 400 - 6)
         panel.setFrameOrigin(origin)
     }
 
@@ -235,96 +229,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ctx.duration = 0.15
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            // completionHandler 是 Sendable；显式跳回 MainActor 操作 NSPanel。
             Task { @MainActor in self?.panel.orderOut(nil) }
         })
     }
-
-    private func hostingView() -> NSView? {
-        (panel.contentView as? NSVisualEffectView)?
-            .subviews
-            .first
-    }
-
-    // MARK: - 设置导航
-
-    @MainActor
-    private func switchToSettings() {
-        viewModel?.showSettings = true
-    }
-
-    @MainActor
-    private func switchToVolume() {
-        viewModel?.showSettings = false
-    }
-
-    @MainActor
-    private func saveSettings(_ s: SettingsState) {
-        settingsState = s
-        settingsModel.settings = s  // 同步 @Published 给面板视图
-        settingsStore.save(s)
-        // 同步开机自启
-        let execPath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path
-        do {
-            try LaunchAgentManager.setEnabled(s.launchAtLogin, executablePath: execPath)
-            if s.launchAtLogin { LaunchAgentManager.load() }
-            else { LaunchAgentManager.unload() }
-        } catch {
-            print("[Settings] LaunchAgent 操作失败: \(error)")
-        }
-    }
-
-    // MARK: - 状态栏音波
-
-    /// 读取 AudioEngine 实时电平，用峰值保持+自由落体衰减更新各条高度，刷新状态栏 image（30fps）。
-    @MainActor
-    private func refreshWaveform() {
-        let raw = max(0, engine?.currentLevelValue() ?? 0)
-        let preset = settingsState.waveformPreset
-        let weights = preset.weights
-        let d = settingsState.decaySpeed.coefficient
-
-        // 确保 waveformHeights 长度匹配 barCount（预设切换时重建）
-        if waveformHeights.count != preset.barCount {
-            waveformHeights = Array(repeating: 0, count: preset.barCount)
-        }
-
-        // 每根条独立：瞬时峰值拉起，缓衰减下落
-        for i in waveformHeights.indices {
-            let target = raw * weights[i]
-            if target >= waveformHeights[i] {
-                waveformHeights[i] = target        // 上升：即时拉满
-            } else {
-                waveformHeights[i] += (target - waveformHeights[i]) * d   // 下落：缓衰减（自由落体感）
-            }
-        }
-        statusItem.button?.image = Self.waveformImage(heights: waveformHeights)
-    }
-
-    /// 绘制 3 根竖条音波，用传入的 per-bar 高度。template 图像追随深浅色。
-    /// lockFocus 必须在主线程（用到当前 graphics context），refreshWaveform 已是 @MainActor。
-    private static func waveformImage(heights: [Float]) -> NSImage {
-        let size = NSSize(width: 28, height: 16)
-        let image = NSImage(size: size)
-        image.isTemplate = true
-        image.lockFocus()
-        let barWidth: CGFloat = 4
-        let gap: CGFloat = 3
-        let totalWidth = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
-        let startX = (size.width - totalWidth) / 2
-        NSColor.labelColor.setFill()
-        for (i, hf) in heights.enumerated() {
-            let h = max(2.0, CGFloat(hf) * size.height)
-            let x = startX + CGFloat(i) * (barWidth + gap)
-            let rect = NSRect(x: x, y: 0, width: barWidth, height: h)
-            let path = NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5)
-            path.fill()
-        }
-        image.unlockFocus()
-        return image
-    }
-
-    // MARK: - NSWindowDelegate
 
     func windowDidResignKey(_ notification: Notification) {
         if (notification.object as? NSPanel) === panel {
@@ -332,18 +239,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func deviceSummaryText() -> String {
-        let devices = AudioDeviceResolver.listDevices()
-        let dell = AudioDeviceResolver.hdmiOutput(devices: devices).map { AudioDeviceResolver.deviceName($0) }
-        if !BlackHoleInstaller.isInstalled { return "未装 BlackHole" }
-        return dell.map { "● \($0)" } ?? "未找到 HDMI 设备"
+    // MARK: — 音量控制 / 设备 / 安装 —
+    func installBlackHole() {
+        viewModel?.deviceSummary = "正在安装 BlackHole…（请在弹出的密码框输入 Mac 密码）"
+        viewModel?.installNeeded = false
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: Result<Void, Error>
+            do { try BlackHoleInstaller.install(); result = .success(()) }
+            catch { result = .failure(error) }
+            Task { @MainActor in self.handleInstallResult(result) }
+        }
     }
 
-    /// 列出可选输出设备（过滤掉 BlackHole —— 它是中转源，不能作 sink）。
-    private func availableOutputDevices() -> [OutputDevice] {
-        AudioDeviceResolver.listDevices()
-            .filter { !$0.name.contains("BlackHole") }
-            .map { OutputDevice(id: $0.id, name: $0.name) }
+    @MainActor
+    func handleInstallResult(_ result: Result<Void, Error>) {
+        switch result {
+        case .success:
+            if BlackHoleInstaller.isInstalled {
+                viewModel?.deviceSummary = "BlackHole 已安装，启动中…"
+                startEngineIfPossible()
+            } else {
+                viewModel?.deviceSummary = "安装未生效，请检查后重启 App"
+                viewModel?.installNeeded = true
+            }
+        case .failure(let error):
+            viewModel?.deviceSummary = "安装失败：\(error)"
+            viewModel?.installNeeded = true
+        }
     }
 
     private func apply(_ next: VolumeState) {
@@ -352,41 +274,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         viewModel?.value = next.value
         viewModel?.muted = next.muted
         switch outputMode {
-        case .transfer:
-            engine?.setTargetGain(next.effectiveGain)
-        case .direct:
-            // 直通模式：控系统音量（静音时 0）。
-            AudioDeviceResolver.setDeviceVolume(currentOutputDevice, Float(next.effectiveGain))
+        case .transfer: engine?.setTargetGain(next.effectiveGain)
+        case .direct: AudioDeviceResolver.setDeviceVolume(currentOutputDevice, Float(next.effectiveGain))
         }
-        // 状态栏 image 由 levelTimer 持续刷新，apply 不需手动更新。
     }
 
-    /// 切换输出音源：原生设备（支持软件音量）走直通，HDMI/DP 走中转。
     @MainActor
     func switchOutputDevice(to device: AudioDeviceID) {
         let supportsVol = AudioDeviceResolver.deviceSupportsVolume(device)
         if supportsVol {
-            // 直通：停 engine，默认输出切到 device，控系统音量。
-            engine?.stop()
-            engine = nil
+            engine?.stop(); engine = nil
             DefaultDeviceGuard.setDefault(device)
             outputMode = .direct
         } else {
-            // 中转：默认输出切 BlackHole，engine sink 换 device。
             let devices = AudioDeviceResolver.listDevices()
             guard let bh = AudioDeviceResolver.blackHole(devices: devices) else { return }
             DefaultDeviceGuard.setDefault(bh)
             do {
-                if let existing = engine {
-                    try existing.switchOutput(to: device)
-                } else {
-                    let newEngine = AudioEngine(input: bh, output: device)
-                    try newEngine.start()
-                    engine = newEngine
-                }
-            } catch {
-                print("switch output failed: \(error)")
-            }
+                if let existing = engine { try existing.switchOutput(to: device) }
+                else { let e = AudioEngine(input: bh, output: device); try e.start(); engine = e }
+            } catch { print("switch output failed: \(error)") }
             outputMode = .transfer
         }
         currentOutputDevice = device
@@ -395,9 +302,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func quit() {
-        engine?.stop()
-        engine = nil
+        engine?.stop(); engine = nil
+        settingsPanel?.orderOut(nil)
         guard_.restore()
         NSApp.terminate(nil)
+    }
+
+    // MARK: — 音波 —
+    @MainActor
+    private func refreshWaveform() {
+        let raw = max(0, engine?.currentLevelValue() ?? 0)
+        let preset = settingsState.waveformPreset
+        let weights = preset.weights
+        let d = settingsState.decaySpeed.coefficient
+        if waveformHeights.count != preset.barCount {
+            waveformHeights = Array(repeating: 0, count: preset.barCount)
+        }
+        for i in waveformHeights.indices {
+            let target = raw * weights[i]
+            if target >= waveformHeights[i] { waveformHeights[i] = target }
+            else { waveformHeights[i] += (target - waveformHeights[i]) * d }
+        }
+        statusItem.button?.image = Self.waveformImage(heights: waveformHeights)
+    }
+
+    private static func waveformImage(heights: [Float]) -> NSImage {
+        let size = NSSize(width: 28, height: 16)
+        let image = NSImage(size: size)
+        image.isTemplate = true
+        image.lockFocus()
+        let barWidth: CGFloat = 4, gap: CGFloat = 3
+        let totalWidth = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
+        let startX = (size.width - totalWidth) / 2
+        NSColor.labelColor.setFill()
+        for (i, hf) in heights.enumerated() {
+            let h = max(2.0, CGFloat(hf) * size.height)
+            let rect = NSRect(x: startX + CGFloat(i) * (barWidth + gap), y: 0, width: barWidth, height: h)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5)
+            path.fill()
+        }
+        image.unlockFocus()
+        return image
+    }
+
+    // MARK: — Helpers —
+    private func deviceSummaryText() -> String {
+        let devs = AudioDeviceResolver.listDevices()
+        let dell = AudioDeviceResolver.hdmiOutput(devices: devs).map { AudioDeviceResolver.deviceName($0) }
+        if !BlackHoleInstaller.isInstalled { return "未装 BlackHole" }
+        return dell.map { "● \($0)" } ?? "未找到 HDMI 设备"
+    }
+
+    private func availableOutputDevices() -> [OutputDevice] {
+        AudioDeviceResolver.listDevices()
+            .filter { !$0.name.contains("BlackHole") }
+            .map { OutputDevice(id: $0.id, name: $0.name) }
     }
 }

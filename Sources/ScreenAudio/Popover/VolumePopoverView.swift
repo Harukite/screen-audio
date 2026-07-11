@@ -138,8 +138,7 @@ final class VolumeViewModel: ObservableObject {
     var onSwitchOutput: ((AudioDeviceID) -> Void)?
     var onSettings: (() -> Void)?
 
-    /// 是否显示设置面板（由 AppDelegate 切换，PanelRootView 感应）。
-    @Published var showSettings: Bool = false
+    // ---------------------------------------------------------------- ⬆️ 接口
 
 
     init(state: VolumeState, deviceSummary: String, installNeeded: Bool = false) {
