@@ -65,7 +65,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// 独立设置面板（点齿轮弹出，独立 NSHostingView，不和音量面板冲突）
     private var settingsPanel: NSPanel?
-    private var settingsVM: SettingsViewModel?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // — ViewModel —
@@ -159,32 +158,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let settingsVM = SettingsViewModel(settings: settingsState)
         settingsVM.onSave = { [weak self] s in self?.saveSettings(s) }
-        settingsVM.onBack = { [weak self] in self?.closeSettings() }
-        self.settingsVM = settingsVM
 
         let sp = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 360),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 340),
             styleMask: [.titled, .closable, .resizable, .utilityWindow],
             backing: .buffered, defer: false)
         sp.title = "ScreenAudio 设置"
-        sp.level = .floating                     // 浮在最前，不被遮挡
+        sp.level = .floating
         sp.isReleasedWhenClosed = false
         sp.center()
 
         let host = NSHostingView(rootView: SettingsView(model: settingsVM))
-        host.frame = NSRect(x: 0, y: 0, width: 280, height: 360)
+        let size = NSSize(width: 380, height: 340)
+        host.frame.origin = .zero
+        host.frame.size = size
         host.autoresizingMask = [.width, .height]
         sp.contentView = host
 
         settingsPanel = sp
-        // accessory app 默认无焦，必须激活才能显示独立窗口
         NSApp.activate(ignoringOtherApps: true)
         sp.makeKeyAndOrderFront(nil)
-    }
-
-    @MainActor
-    private func closeSettings() {
-        settingsPanel?.orderOut(nil)
     }
 
     private func saveSettings(_ s: SettingsState) {
