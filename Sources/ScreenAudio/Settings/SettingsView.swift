@@ -62,11 +62,11 @@ struct SettingsView: View {
     private var tabBar: some View {
         Picker("", selection: $model.selectedTab) {
             ForEach(SettingsTab.allCases) { tab in
+                // Label 在 .segmented 下图标+文字都会显示
                 Label(tab.rawValue, systemImage: tab.systemImage).tag(tab)
             }
         }
         .pickerStyle(.segmented)
-        .labelsHidden()
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
@@ -78,11 +78,10 @@ private struct GeneralTab: View {
     @ObservedObject var model: SettingsViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // 开机自启
+        // 通用页内容居中显示
+        VStack(spacing: 20) {
             Toggle("开机自启", isOn: binding(\.launchAtLogin) { model.setLaunchAtLogin($0) })
 
-            // 波形形态
             VStack(alignment: .leading, spacing: 6) {
                 Text("波形形态").foregroundStyle(.primary)
                 Picker("", selection: binding(\.waveformPreset) { model.setWaveformPreset($0) }) {
@@ -94,7 +93,6 @@ private struct GeneralTab: View {
                 .labelsHidden()
             }
 
-            // 衰减速度
             VStack(alignment: .leading, spacing: 6) {
                 Text("衰减速度").foregroundStyle(.primary)
                 Picker("", selection: binding(\.decaySpeed) { model.setDecaySpeed($0) }) {
@@ -106,17 +104,15 @@ private struct GeneralTab: View {
                 .labelsHidden()
             }
 
-            // 项目作者
             VStack(alignment: .leading, spacing: 6) {
                 Text("项目作者").foregroundStyle(.primary)
                 TextField("输入作者名", text: binding(\.authorName) { model.setAuthorName($0) })
                     .textFieldStyle(.roundedBorder)
             }
-
-            Spacer()
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 20)
+        .frame(maxWidth: 320)          // 限制内容宽度，居中
+        .frame(maxWidth: .infinity)    // 在父容器内水平居中
+        .padding(.vertical, 24)
     }
 
     private func binding<T>(_ keyPath: WritableKeyPath<SettingsState, T>,

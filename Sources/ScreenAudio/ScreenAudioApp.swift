@@ -168,6 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sp.titleVisibility = .hidden
         sp.level = .floating
         sp.isReleasedWhenClosed = false
+        sp.hidesOnDeactivate = false          // 失焦不隐藏，保持打开
+        sp.isFloatingPanel = true
         sp.center()
 
         let host = NSHostingView(rootView: SettingsView(model: settingsVM))
