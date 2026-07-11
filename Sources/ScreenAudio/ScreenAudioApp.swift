@@ -99,23 +99,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             LaunchAgentManager.load()
         }
 
-        // ===== 创建 Host（仅一次）=====
+        // ===== 创建 Host（仅一次，用 autoresizingMask 不用 Auto Layout ——
+        // Auto Layout 和 NSHostingView.displayCycle 冲突导致 invalidateSafeAreaInsets crash）=====
         guard let blur = panel.contentView as? NSVisualEffectView else { return }
+        // panel 高度固定 400pt（够放两个视图），避免 setContentSize 触发动态重布局
+        panel.setContentSize(NSSize(width: panelWidth, height: 400))
         let host = NSHostingView(rootView: PanelRootView(
             volumeVM: viewModel,
             settingsVM: settingsModel,
             onQuit: { [weak self] in self?.quit() }
         ))
-        host.translatesAutoresizingMaskIntoConstraints = false
+        host.frame = blur.bounds
+        host.autoresizingMask = [.width, .height]  // 跟随 blur 尺寸，不用 constraints
         host.wantsLayer = true
         host.layer?.backgroundColor = .clear
         blur.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
-            host.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
-            host.topAnchor.constraint(equalTo: blur.topAnchor),
-            host.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
-        ])
 
         // ===== 启动电平刷新（30fps）=====
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0/30.0, repeats: true) { [weak self] _ in
@@ -210,16 +208,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// 水平居中紧贴 statusItem.button 下方。高度依赖 SwiftUI 内容自适应（fittingSize）。
     private func positionPanel() {
-        let fitHeight = hostingView()?.fittingSize.height ?? 200
-        panel.setContentSize(NSSize(width: panelWidth, height: max(fitHeight, 120)))
+        // 面板高度固定 400pt（创建时 setContentSize），不再动态改。避免 setContentSize
+        // 触发 NSHostingView 的 invalidateSafeAreaInsets → Auto Layout crash。
+        let panelHeight: CGFloat = 400
 
         guard let button = statusItem.button, let win = button.window else { return }
-        // button.bounds 是 button 自身坐标系（原点 0,0），convertToScreen 期望窗口坐标。
-        // 先把 bounds 转到窗口坐标系，再转屏幕，得到按钮在屏幕上的真实位置。
         let buttonRect = win.convertToScreen(button.convert(button.bounds, to: nil))
         let origin = NSPoint(
             x: buttonRect.midX - panelWidth / 2,
-            y: buttonRect.minY - fitHeight - 6)   // 紧贴菜单栏下方，留 6pt
+            y: buttonRect.minY - panelHeight - 6)   // 紧贴菜单栏下方，留 6pt
         panel.setFrameOrigin(origin)
     }
 
@@ -254,16 +251,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @MainActor
     private func switchToSettings() {
         viewModel?.showSettings = true
-        // SwiftUI 还没渲染新视图（display cycle 在后面），立即读 fittingSize 拿到的
-        // 是旧视图高度 → setContentSize 用旧值 → display cycle 来后新视图 layout 冲突 → crash。
-        // 延迟到下一个 run loop，等 SwiftUI 渲染完成再定位。
-        DispatchQueue.main.async { [weak self] in self?.positionPanel() }
     }
 
     @MainActor
     private func switchToVolume() {
         viewModel?.showSettings = false
-        DispatchQueue.main.async { [weak self] in self?.positionPanel() }
     }
 
     @MainActor
