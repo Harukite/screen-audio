@@ -60,15 +60,37 @@ struct SettingsView: View {
     }
 
     private var tabBar: some View {
-        Picker("", selection: $model.selectedTab) {
+        // SwiftUI 的 .segmented Picker 在 macOS 不渲染图标，用自定义按钮还原
+        // 参考 BobHelper 风格：选中蓝色图标+文字，未选中灰色
+        HStack(spacing: 6) {
             ForEach(SettingsTab.allCases) { tab in
-                // Label 在 .segmented 下图标+文字都会显示
-                Label(tab.rawValue, systemImage: tab.systemImage).tag(tab)
+                tabButton(tab)
             }
         }
-        .pickerStyle(.segmented)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private func tabButton(_ tab: SettingsTab) -> some View {
+        let isSelected = model.selectedTab == tab
+        return Button {
+            model.selectedTab = tab
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: tab.systemImage)
+                    .font(.system(size: 12))
+                Text(tab.rawValue)
+                    .font(.system(size: 12, weight: isSelected ? .medium : .regular))
+            }
+            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
