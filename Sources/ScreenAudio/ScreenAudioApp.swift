@@ -152,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: — 独立设置面板 —
     @MainActor
     private func openSettings() {
+        print("[DEBUG] openSettings called")
         // 已存在就前置
         if let sp = settingsPanel, sp.isVisible {
             sp.makeKeyAndOrderFront(nil)
@@ -165,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let sp = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 280, height: 360),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .nonactivatingPanel],
             backing: .buffered, defer: false)
         sp.title = "ScreenAudio 设置"
         sp.isReleasedWhenClosed = false
@@ -179,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         settingsPanel = sp
         sp.makeKeyAndOrderFront(nil)
+        // 强制前置确保可见
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @MainActor

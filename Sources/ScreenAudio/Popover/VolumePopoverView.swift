@@ -100,10 +100,13 @@ struct VolumePopoverView: View {
                 }
 
                 HStack(spacing: 8) {
-                    Button { model.onSettings?() } label: {
+                    Button {
+                        print("[DEBUG-BTN] gear tapped")
+                        model.onSettings?()
+                    } label: {
                         Image(systemName: "gear")
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.bordered)
 
                     Button(model.muted ? "取消静音" : "静音") {
                         model.toggleMute()
