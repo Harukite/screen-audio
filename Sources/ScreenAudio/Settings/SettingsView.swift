@@ -5,9 +5,9 @@ import SwiftUI
 
 // MARK: - Settings View Model
 
-/// 设置视图的 ViewModel：绑定 SettingsState，变更通过 onSave 回传 AppDelegate。
 final class SettingsViewModel: ObservableObject {
     @Published var settings: SettingsState
+    @Published var selectedTab: SettingsTab = .general
     var onSave: ((SettingsState) -> Void)?
 
     init(settings: SettingsState) {
@@ -20,27 +20,71 @@ final class SettingsViewModel: ObservableObject {
     func setAuthorName(_ n: String) { settings.authorName = n; onSave?(settings) }
 }
 
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case general = "通用"
+    case about = "关于"
+    var id: String { rawValue }
+    var systemImage: String {
+        switch self {
+        case .general: return "gearshape"
+        case .about: return "info.circle"
+        }
+    }
+}
+
 // MARK: - Settings View
 
-/// macOS 原生风格设置面板：三段分层（通用 / 波形 / 关于），
-/// 波形区带实时音波形预览——切换形态或衰减速度时即时变化。
+/// macOS 原生偏好设置窗口：顶部 Tab（通用/关于），下方切换内容。
 struct SettingsView: View {
     @ObservedObject var model: SettingsViewModel
 
     var body: some View {
         VStack(spacing: 0) {
-            // ---- 通用 ----
-            SectionHeader("通用")
-            ToggleSettingsRow("开机自启", isOn: binding(\.launchAtLogin) { model.setLaunchAtLogin($0) }) {
-                model.setLaunchAtLogin(!model.settings.launchAtLogin)
+            // 顶部 Tab 栏
+            tabBar
+
+            Divider()
+
+            // 内容区
+            Group {
+                switch model.selectedTab {
+                case .general:
+                    GeneralTab(model: model)
+                case .about:
+                    AboutTab()
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: 480, height: 360)
+    }
 
-            Divider().padding(.vertical, 10)
+    private var tabBar: some View {
+        Picker("", selection: $model.selectedTab) {
+            ForEach(SettingsTab.allCases) { tab in
+                Label(tab.rawValue, systemImage: tab.systemImage).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+}
 
-            // ---- 波形 ----
-            SectionHeader("波形")
+// MARK: - General Tab
+
+private struct GeneralTab: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // 开机自启
+            Toggle("开机自启", isOn: binding(\.launchAtLogin) { model.setLaunchAtLogin($0) })
+
+            // 波形形态
             VStack(alignment: .leading, spacing: 6) {
-                Text("形态").font(.caption).foregroundStyle(.secondary)
+                Text("波形形态").foregroundStyle(.primary)
                 Picker("", selection: binding(\.waveformPreset) { model.setWaveformPreset($0) }) {
                     Text("紧凑").tag(WaveformPreset.compact)
                     Text("舒展").tag(WaveformPreset.spread)
@@ -48,14 +92,11 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+            }
 
-                // 实时波形预览
-                WaveformPreview(preset: model.settings.waveformPreset)
-                    .frame(height: 28)
-                    .padding(.vertical, 4)
-
-                Text("衰减速度").font(.caption).foregroundStyle(.secondary)
-                    .padding(.top, 6)
+            // 衰减速度
+            VStack(alignment: .leading, spacing: 6) {
+                Text("衰减速度").foregroundStyle(.primary)
                 Picker("", selection: binding(\.decaySpeed) { model.setDecaySpeed($0) }) {
                     Text("快").tag(DecaySpeed.fast)
                     Text("中").tag(DecaySpeed.medium)
@@ -65,97 +106,66 @@ struct SettingsView: View {
                 .labelsHidden()
             }
 
-            Divider().padding(.vertical, 10)
-
-            // ---- 关于 ----
-            SectionHeader("关于")
+            // 项目作者
             VStack(alignment: .leading, spacing: 6) {
-                Text("项目作者").font(.caption).foregroundStyle(.secondary)
+                Text("项目作者").foregroundStyle(.primary)
                 TextField("输入作者名", text: binding(\.authorName) { model.setAuthorName($0) })
                     .textFieldStyle(.roundedBorder)
             }
 
             Spacer()
-
-            // 底部版本号
-            Text("ScreenAudio v0.1")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(.bottom, 8)
         }
-        .padding(20)
-        .frame(width: 380)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
     }
 
-    // helper — 双向 binding 转 onSet
     private func binding<T>(_ keyPath: WritableKeyPath<SettingsState, T>,
-                            onSet: @escaping (T) -> Void)
-        -> Binding<T>
-    {
-        Binding(
-            get: { model.settings[keyPath: keyPath] },
-            set: { onSet($0) }
-        )
+                            onSet: @escaping (T) -> Void) -> Binding<T> {
+        Binding(get: { model.settings[keyPath: keyPath] }, set: { onSet($0) })
     }
 }
 
-// MARK: - Section Header
+// MARK: - About Tab
 
-private struct SectionHeader: View {
-    let title: String
-    init(_ title: String) { self.title = title }
+private struct AboutTab: View {
     var body: some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+        VStack(spacing: 14) {
             Spacer()
-        }
-        .padding(.bottom, 8)
-    }
-}
 
-// MARK: - Toggle Row
+            // 应用图标（SF Symbol）
+            Image(systemName: "waveform")
+                .font(.system(size: 64, weight: .light))
+                .foregroundStyle(.tint)
+                .padding(20)
+                .background(
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(.regularMaterial)
+                )
 
-private struct ToggleSettingsRow: View {
-    let label: String
-    let isOn: Binding<Bool>
-    let action: () -> Void
-    init(_ label: String, isOn: Binding<Bool>, action: @escaping () -> Void) {
-        self.label = label; self.isOn = isOn; self.action = action
-    }
-    var body: some View {
-        HStack {
-            Text(label)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Toggle("", isOn: Binding(get: { isOn.wrappedValue },
-                           set: { _ in action() }))
-                .labelsHidden()
-        }
-    }
-}
+            // 应用名
+            Text("ScreenAudio")
+                .font(.system(size: 20, weight: .semibold))
 
-// MARK: - Waveform Preview
+            // 版本号
+            Text("版本 0.1")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
 
-/// 根据当前波形形态绘制静态预览（3/5/7 根条）。
-/// 切换形态时跟状态栏波形同步变化。
-private struct WaveformPreview: View {
-    let preset: WaveformPreset
+            Spacer()
 
-    var body: some View {
-        GeometryReader { geo in
-            HStack(spacing: CGFloat(preset.barCount > 5 ? 2 : 3)) {
-                ForEach(0..<preset.barCount, id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(.secondary)
-                        .frame(width: barWidth)
-                        // 每根条高度按权重缩放（预览模拟"有音频"状态，取标高 0.7）
-                        .frame(height: max(4, CGFloat(preset.weights[i]) * geo.size.height * 0.7))
+            // 底部链接
+            HStack(spacing: 24) {
+                Link(destination: URL(string: "https://github.com/Harukite/screen-audio")!) {
+                    Label("GitHub 仓库", systemImage: "globe")
+                }
+                Divider().frame(height: 14)
+                Link(destination: URL(string: "https://github.com/Harukite/screen-audio/issues/new")!) {
+                    Label("问题反馈", systemImage: "envelope")
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .center)
+            .font(.system(size: 12))
+            .padding(.bottom, 20)
         }
+        .frame(maxWidth: .infinity)
     }
-
-    private var barWidth: CGFloat { preset.barCount > 5 ? 3 : 4 }
 }

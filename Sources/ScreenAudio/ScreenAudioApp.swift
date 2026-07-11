@@ -160,16 +160,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         settingsVM.onSave = { [weak self] s in self?.saveSettings(s) }
 
         let sp = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 340),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow],
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 360),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
-        sp.title = "ScreenAudio 设置"
+        sp.title = "ScreenAudio"
+        sp.titlebarAppearsTransparent = false
+        sp.titleVisibility = .hidden
         sp.level = .floating
         sp.isReleasedWhenClosed = false
         sp.center()
 
         let host = NSHostingView(rootView: SettingsView(model: settingsVM))
-        let size = NSSize(width: 380, height: 340)
+        let size = NSSize(width: 480, height: 360)
         host.frame.origin = .zero
         host.frame.size = size
         host.autoresizingMask = [.width, .height]
