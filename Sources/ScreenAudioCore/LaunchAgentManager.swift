@@ -29,7 +29,7 @@ public enum LaunchAgentManager {
                 "Label": label,
                 "ProgramArguments": [executablePath],
                 "RunAtLoad": true,
-                "KeepAlive": true,
+                // 不要 KeepAlive：手动退出即真退出，避免"一关就自动重启"
             ]
             let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             try data.write(to: plistURL)
