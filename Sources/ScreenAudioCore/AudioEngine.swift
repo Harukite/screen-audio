@@ -99,10 +99,20 @@ public final class AudioEngine: @unchecked Sendable {
         self.outputProcID = outID
 
         status = AudioDeviceStart(inputDevice, inID)
-        guard status == noErr else { throw EngineError.cannotStart("input status=\(status)") }
+        guard status == noErr else {
+            AudioDeviceDestroyIOProcID(outputDevice, outID)
+            self.outputProcID = nil
+            AudioDeviceDestroyIOProcID(inputDevice, inID)
+            self.inputProcID = nil
+            throw EngineError.cannotStart("input status=\(status)")
+        }
         status = AudioDeviceStart(outputDevice, outID)
         guard status == noErr else {
             AudioDeviceStop(inputDevice, inID)
+            AudioDeviceDestroyIOProcID(inputDevice, inID)
+            self.inputProcID = nil
+            AudioDeviceDestroyIOProcID(outputDevice, outID)
+            self.outputProcID = nil
             throw EngineError.cannotStart("output status=\(status)")
         }
         print("[Engine] started: input=\(AudioDeviceResolver.deviceName(inputDevice)), output=\(AudioDeviceResolver.deviceName(outputDevice))")
@@ -121,15 +131,9 @@ public final class AudioEngine: @unchecked Sendable {
         }
     }
 
-    /// 切换输出 sink（中转模式换 HDMI 设备时用）。停旧 output IOProc → 换设备 → 重建。
+    /// 切换输出 sink（中转模式换 HDMI 设备时用）。先启动新 output，再释放旧 output。
     public func switchOutput(to newOutput: AudioDeviceID) throws {
-        if let p = outputProcID {
-            AudioDeviceStop(outputDevice, p)
-            AudioDeviceDestroyIOProcID(outputDevice, p)
-            outputProcID = nil
-        }
-        outputDevice = newOutput
-        currentGain = 0   // 重置 ramp，防爆音
+        guard newOutput != outputDevice else { return }
 
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         let outputProc: AudioDeviceIOProc = { _, _, _, _, outOutputData, _, clientData in
@@ -139,18 +143,24 @@ public final class AudioEngine: @unchecked Sendable {
             return noErr
         }
         var outID: AudioDeviceIOProcID?
-        let status = AudioDeviceCreateIOProcID(outputDevice, outputProc, selfPtr, &outID)
+        let status = AudioDeviceCreateIOProcID(newOutput, outputProc, selfPtr, &outID)
         guard status == noErr, let outID else {
             throw EngineError.cannotCreateIO("switchOutput status=\(status)")
         }
-        self.outputProcID = outID
 
-        let startStatus = AudioDeviceStart(outputDevice, outID)
+        let startStatus = AudioDeviceStart(newOutput, outID)
         guard startStatus == noErr else {
-            AudioDeviceDestroyIOProcID(outputDevice, outID)
-            self.outputProcID = nil
+            AudioDeviceDestroyIOProcID(newOutput, outID)
             throw EngineError.cannotStart("switchOutput status=\(startStatus)")
         }
+
+        if let oldProcID = outputProcID {
+            AudioDeviceStop(outputDevice, oldProcID)
+            AudioDeviceDestroyIOProcID(outputDevice, oldProcID)
+        }
+        outputDevice = newOutput
+        outputProcID = outID
+        currentGain = 0   // 重置 ramp，防爆音
     }
 
     // MARK: - 回调（real-time 线程，禁止阻塞/堆分配）
@@ -175,8 +185,7 @@ public final class AudioEngine: @unchecked Sendable {
         }
         if total > 0 {
             let rms = sqrt(sumSq / Float(total))
-            // 源 RMS 通常 0.05–0.3，放大 *4 让正常音频下音波明显跳动；clamp 0–1。
-            currentLevel.store(min(1.0, rms * 30.0), ordering: .releasing)
+            currentLevel.store(WaveformMeter.sourceLevel(fromRMS: rms), ordering: .releasing)
         }
     }
 

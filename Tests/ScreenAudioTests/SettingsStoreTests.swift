@@ -13,12 +13,10 @@ final class SettingsStoreTests: XCTestCase {
         s.launchAtLogin = true
         s.waveformPreset = .bouncy
         s.decaySpeed = .slow
-        s.authorName = "TestAuthor"
         store.save(s)
         let loaded = store.load()
         XCTAssertTrue(loaded.launchAtLogin)
         XCTAssertEqual(loaded.waveformPreset, .bouncy)
         XCTAssertEqual(loaded.decaySpeed, .slow)
-        XCTAssertEqual(loaded.authorName, "TestAuthor")
     }
 }

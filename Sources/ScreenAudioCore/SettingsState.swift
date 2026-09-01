@@ -36,6 +36,15 @@ public enum DecaySpeed: String, CaseIterable, Codable, Sendable {
         case .slow:   0.04
         }
     }
+
+    /// 音柱下落时，每一像素档要停住的帧数。快档更像上下跳动。
+    public var fallInterval: Int {
+        switch self {
+        case .fast:   1
+        case .medium: 2
+        case .slow:   3
+        }
+    }
 }
 
 /// 应用设置状态，Codable 持久化用。
@@ -43,19 +52,16 @@ public struct SettingsState: Equatable, Codable, Sendable {
     public var launchAtLogin: Bool
     public var waveformPreset: WaveformPreset
     public var decaySpeed: DecaySpeed
-    public var authorName: String
 
     public static let `default` = SettingsState(
         launchAtLogin: false,
         waveformPreset: .compact,
-        decaySpeed: .fast,
-        authorName: ""
+        decaySpeed: .fast
     )
 
-    public init(launchAtLogin: Bool, waveformPreset: WaveformPreset, decaySpeed: DecaySpeed, authorName: String) {
+    public init(launchAtLogin: Bool, waveformPreset: WaveformPreset, decaySpeed: DecaySpeed) {
         self.launchAtLogin = launchAtLogin
         self.waveformPreset = waveformPreset
         self.decaySpeed = decaySpeed
-        self.authorName = authorName
     }
 }
