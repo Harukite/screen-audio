@@ -1,0 +1,63 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 打 tag 时需要写 Releases
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Apple Silicon runner：产物是 arm64，且 Package.swift 要求 macOS 15 SDK
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 工具链信息
+        run: |
+          swift --version
+          xcodebuild -version
+          echo "可用 Xcode："; ls /Applications | grep -i '^Xcode' || true
+
+      - name: 测试
+        run: swift test
+
+      - name: 打包
+        run: ./Packaging/build-arm64.sh
+
+      - name: 校验产物
+        run: |
+          app=.build/artifacts/ScreenAudio.app
+          test -f "$app/Contents/MacOS/ScreenAudio"
+          test -f "$app/Contents/Resources/AppIcon.icns"
+          codesign --verify --deep --strict "$app"
+          lipo -archs "$app/Contents/MacOS/ScreenAudio" | grep -q arm64
+          echo "SHA256: $(shasum -a 256 .build/artifacts/*.zip | cut -d' ' -f1)"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v5
+        with:
+          name: ScreenAudio-macos-arm64
+          path: .build/artifacts/ScreenAudio-macos-arm64-audio-permission.zip
+          if-no-files-found: error
+
+      # 仅在推送 v* tag 时发布 Release
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: .build/artifacts/ScreenAudio-macos-arm64-audio-permission.zip
+          generate_release_notes: true
+          body: |
+            macOS arm64 构建产物。
+
+            > 使用 ad-hoc 签名、未经公证。首次打开需右键「打开」，
+            > 或执行 `xattr -dr com.apple.quarantine ScreenAudio.app`。
+            > 应用需要麦克风权限以从 BlackHole 捕获系统声音。
