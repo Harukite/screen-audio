@@ -18,7 +18,7 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 工具链信息
         run: |
@@ -42,7 +42,7 @@ jobs:
           echo "SHA256: $(shasum -a 256 .build/artifacts/*.zip | cut -d' ' -f1)"
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ScreenAudio-macos-arm64
           path: .build/artifacts/ScreenAudio-macos-arm64-audio-permission.zip
