@@ -15,3 +15,7 @@ DerivedData/
 
 # Claude Code (local-only settings; keep shared .claude/ content trackable)
 .claude/settings.local.json
+
+# 本地工作笔记（运行日志与项目约定），不进入公开历史
+STATE.md
+SKILL.md
